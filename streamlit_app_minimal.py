@@ -555,6 +555,53 @@ def import_social_media_to_reports():
     except Exception:
         return False
 
+def get_recent_reports(hours: int = 24) -> list:
+    """Get reports from the last N hours"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.created_at >= datetime('now', '-{} hours')
+            ORDER BY r.created_at DESC
+        '''.format(hours))
+        
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_time_ago(timestamp_str: str) -> str:
+    """Convert timestamp to 'time ago' format"""
+    try:
+        # Parse the timestamp
+        if isinstance(timestamp_str, str):
+            created_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+        else:
+            created_time = timestamp_str
+        
+        now = datetime.now()
+        diff = now - created_time
+        
+        if diff.days > 0:
+            return f"{diff.days} day{'s' if diff.days != 1 else ''} ago"
+        elif diff.seconds >= 3600:
+            hours = diff.seconds // 3600
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif diff.seconds >= 60:
+            minutes = diff.seconds // 60
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        else:
+            return "Just now"
+    except Exception:
+        return "Unknown time"
+
 # Initialize database
 init_database()
 
@@ -576,7 +623,7 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Submit Report", "View Reports", "Live Feeds", "Manage Reports", "User Management", "Logout"]
+            ["Dashboard", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "Logout"]
         )
         
         if page == "Dashboard":
@@ -585,6 +632,8 @@ def main():
             show_submit_report()
         elif page == "View Reports":
             show_view_reports()
+        elif page == "Risk History":
+            show_risk_history()
         elif page == "Live Feeds":
             show_live_feeds()
         elif page == "Manage Reports":
@@ -712,9 +761,104 @@ def show_dashboard():
     with col4:
         st.metric("Resolved", stats['resolved'])
     
+    # Live Road Status - Last 24 Hours
+    st.subheader("🚨 Live Road Status - Last 24 Hours")
+    
+    # Import live data if needed
+    if st.button("🔄 Refresh Live Data", type="secondary"):
+        with st.spinner("Updating live data..."):
+            import_news_to_reports()
+            import_social_media_to_reports()
+        st.success("Live data updated!")
+        st.rerun()
+    
+    # Get recent reports (last 24 hours)
+    recent_reports = get_recent_reports(hours=24)
+    
+    if recent_reports:
+        # Group by risk type for summary
+        risk_summary = {}
+        for report in recent_reports:
+            risk_type = report[1]  # risk_type is at index 1
+            if risk_type not in risk_summary:
+                risk_summary[risk_type] = 0
+            risk_summary[risk_type] += 1
+        
+        # Display risk summary
+        st.markdown("### 📈 Risk Summary (Last 24 Hours)")
+        if risk_summary:
+            cols = st.columns(len(risk_summary))
+            for i, (risk_type, count) in enumerate(risk_summary.items()):
+                with cols[i]:
+                    risk_colors = {
+                        'Robbery': '#dc3545',
+                        'Flooding': '#007bff',
+                        'Protest': '#6f42c1',
+                        'Road Damage': '#fd7e14',
+                        'Traffic': '#ffc107'
+                    }
+                    color = risk_colors.get(risk_type, '#6c757d')
+                    st.markdown(f"""
+                    <div style="background-color: {color}; color: white; padding: 1rem; border-radius: 8px; text-align: center;">
+                        <h4>{risk_type}</h4>
+                        <h2>{count}</h2>
+                        <p>Reports</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # Display recent reports
+        st.markdown("### 📋 Recent Risk Reports")
+        for report in recent_reports[:5]:  # Show last 5 reports
+            report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+            
+            # Create status badge
+            status_class = f"status-{status.lower()}"
+            risk_class = f"risk-type-{risk_type.lower().replace(' ', '')}"
+            
+            # Source badge
+            source_icons = {
+                'user': '👤',
+                'news': '📰',
+                'social': '📱'
+            }
+            source_colors = {
+                'user': '#28a745',
+                'news': '#007bff',
+                'social': '#6f42c1'
+            }
+            
+            source_icon = source_icons.get(source_type, '📄')
+            source_color = source_colors.get(source_type, '#6c757d')
+            
+            # Time ago calculation
+            time_ago = get_time_ago(created_at)
+            
+            st.markdown(f"""
+            <div class="risk-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span class="{risk_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{risk_type.upper()}</span>
+                        <span style="background-color: {source_color}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{source_icon} {source_type.upper()}</span>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span class="{status_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{status.upper()}</span>
+                        <span style="color: #6c757d; font-size: 12px;">{time_ago}</span>
+                    </div>
+                </div>
+                <p><strong>Location:</strong> 📍 {location}</p>
+                <p><strong>Description:</strong> {description[:100]}{'...' if len(description) > 100 else ''}</p>
+                {f'<p><strong>Source:</strong> <a href="{source_url}" target="_blank">🔗 View Original</a></p>' if source_url else ''}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        if len(recent_reports) > 5:
+            st.info(f"Showing 5 of {len(recent_reports)} recent reports. Use 'View All Reports' to see more.")
+    else:
+        st.info("No recent reports in the last 24 hours. Click 'Refresh Live Data' to import latest news and social media updates.")
+    
     # Quick actions
     st.subheader("Quick Actions")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if st.button("📝 Submit New Report", type="primary"):
@@ -725,6 +869,10 @@ def show_dashboard():
             st.rerun()
     
     with col3:
+        if st.button("📰 Live Feeds"):
+            st.rerun()
+    
+    with col4:
         if user['role'] == 'Admin':
             if st.button("🛠️ Manage Reports"):
                 st.rerun()
@@ -993,6 +1141,189 @@ def show_manage_reports():
                             st.rerun()
     else:
         st.info("No reports found.")
+
+def show_risk_history():
+    st.header("📊 Risk History")
+    
+    # Time period filter
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        time_period = st.selectbox(
+            "Select Time Period",
+            ["Last 24 Hours", "Last 7 Days", "Last 30 Days", "All Time"],
+            index=0
+        )
+    
+    with col2:
+        risk_type_filter = st.selectbox(
+            "Filter by Risk Type",
+            ["All Types", "Robbery", "Flooding", "Protest", "Road Damage", "Traffic", "Other"]
+        )
+    
+    with col3:
+        if st.button("🔄 Refresh"):
+            st.rerun()
+    
+    # Convert time period to hours
+    time_mapping = {
+        "Last 24 Hours": 24,
+        "Last 7 Days": 168,
+        "Last 30 Days": 720,
+        "All Time": None
+    }
+    
+    hours = time_mapping.get(time_period)
+    
+    # Get reports based on time period
+    if hours:
+        reports = get_recent_reports(hours=hours)
+    else:
+        reports = get_risk_reports()
+    
+    # Filter by risk type if selected
+    if risk_type_filter != "All Types":
+        reports = [r for r in reports if r[1] == risk_type_filter]  # r[1] is risk_type
+    
+    if reports:
+        st.subheader(f"Risk Reports - {time_period} ({len(reports)} reports)")
+        
+        # Statistics summary
+        st.markdown("### 📈 Statistics Summary")
+        
+        # Risk type distribution
+        risk_counts = {}
+        source_counts = {'user': 0, 'news': 0, 'social': 0}
+        status_counts = {'pending': 0, 'verified': 0, 'resolved': 0, 'false': 0}
+        
+        for report in reports:
+            risk_type = report[1]
+            source_type = report[10]  # source_type
+            status = report[6]  # status
+            
+            risk_counts[risk_type] = risk_counts.get(risk_type, 0) + 1
+            source_counts[source_type] = source_counts.get(source_type, 0) + 1
+            status_counts[status] = status_counts.get(status, 0) + 1
+        
+        # Display statistics in columns
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Risk Type Distribution**")
+            for risk_type, count in risk_counts.items():
+                st.write(f"• {risk_type}: {count}")
+        
+        with col2:
+            st.markdown("**Source Distribution**")
+            for source_type, count in source_counts.items():
+                if count > 0:
+                    source_icons = {'user': '👤', 'news': '📰', 'social': '📱'}
+                    icon = source_icons.get(source_type, '📄')
+                    st.write(f"• {icon} {source_type.title()}: {count}")
+        
+        with col3:
+            st.markdown("**Status Distribution**")
+            for status, count in status_counts.items():
+                if count > 0:
+                    status_colors = {
+                        'pending': '#ffc107',
+                        'verified': '#28a745',
+                        'resolved': '#007bff',
+                        'false': '#dc3545'
+                    }
+                    color = status_colors.get(status, '#6c757d')
+                    st.markdown(f"• <span style='color: {color}; font-weight: bold;'>{status.title()}</span>: {count}", unsafe_allow_html=True)
+        
+        # Detailed reports list
+        st.markdown("### 📋 Detailed Reports")
+        
+        # Search functionality
+        search_term = st.text_input("🔍 Search reports by location or description", placeholder="Enter search term...")
+        
+        # Filter reports by search term
+        if search_term:
+            filtered_reports = []
+            for report in reports:
+                description = report[2].lower()  # description
+                location = report[3].lower()  # location
+                if search_term.lower() in description or search_term.lower() in location:
+                    filtered_reports.append(report)
+            reports = filtered_reports
+            st.info(f"Found {len(reports)} reports matching '{search_term}'")
+        
+        # Display reports with pagination
+        reports_per_page = 10
+        total_pages = (len(reports) + reports_per_page - 1) // reports_per_page
+        
+        if total_pages > 1:
+            page_num = st.selectbox(f"Page (1-{total_pages})", range(1, total_pages + 1)) - 1
+            start_idx = page_num * reports_per_page
+            end_idx = start_idx + reports_per_page
+            current_reports = reports[start_idx:end_idx]
+        else:
+            current_reports = reports
+        
+        for report in current_reports:
+            report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+            
+            # Create status badge
+            status_class = f"status-{status.lower()}"
+            risk_class = f"risk-type-{risk_type.lower().replace(' ', '')}"
+            
+            # Source badge
+            source_icons = {
+                'user': '👤',
+                'news': '📰',
+                'social': '📱'
+            }
+            source_colors = {
+                'user': '#28a745',
+                'news': '#007bff',
+                'social': '#6f42c1'
+            }
+            
+            source_icon = source_icons.get(source_type, '📄')
+            source_color = source_colors.get(source_type, '#6c757d')
+            
+            # Time ago calculation
+            time_ago = get_time_ago(created_at)
+            
+            with st.expander(f"{source_icon} {risk_type} - {location} ({time_ago})"):
+                st.markdown(f"""
+                <div style="margin-bottom: 10px;">
+                    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                        <span class="{risk_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{risk_type.upper()}</span>
+                        <span style="background-color: {source_color}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{source_icon} {source_type.upper()}</span>
+                        <span class="{status_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{status.upper()}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.write(f"**Description:** {description}")
+                st.write(f"**Location:** 📍 {location}")
+                st.write(f"**Coordinates:** {lat}, {lon}")
+                st.write(f"**Reporter:** {reporter_name}")
+                st.write(f"**Created:** {created_at}")
+                st.write(f"**Confirmations:** ✅ {confirmations}")
+                if source_url:
+                    st.write(f"**Source:** [View Original]({source_url})")
+        
+        # Export functionality
+        if st.button("📊 Export to CSV"):
+            # Create CSV data
+            csv_data = "Risk Type,Description,Location,Status,Source,Reporter,Created At\n"
+            for report in reports:
+                risk_type, description, location, status, _, _, _, _, created_at, reporter_name, source_type, _ = report
+                csv_data += f'"{risk_type}","{description}","{location}","{status}","{source_type}","{reporter_name}","{created_at}"\n'
+            
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_data,
+                file_name=f"risk_history_{time_period.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+    else:
+        st.info(f"No reports found for {time_period}.")
 
 def show_live_feeds():
     st.header("📰 Live News & Social Media Feeds")

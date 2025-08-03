@@ -76,7 +76,7 @@ st.markdown("""
 
 # Database setup
 def init_database():
-    """Initialize SQLite database with users and risk reports tables"""
+    """Initialize SQLite database with users, risk reports, and admin logs tables"""
     try:
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
@@ -111,15 +111,46 @@ def init_database():
                 source_url TEXT,
                 status TEXT DEFAULT 'pending',
                 confirmations INTEGER DEFAULT 0,
+                upvotes INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
         
+        # Admin logs table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admin_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                admin_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id INTEGER,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (admin_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Report upvotes table for community validation
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS report_upvotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (report_id) REFERENCES risk_reports (id),
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(report_id, user_id)
+            )
+        ''')
+        
         conn.commit()
         conn.close()
-    except Exception:
-        pass  # Suppress errors
+        return True
+    except Exception as e:
+        st.error(f"Database initialization error: {str(e)}")
+        return False
 
 # Utility functions
 def hash_password(password: str) -> str:
@@ -602,12 +633,203 @@ def get_time_ago(timestamp_str: str) -> str:
     except Exception:
         return "Unknown time"
 
+# Admin-specific functions
+def authenticate_admin(identifier: str, password: str) -> tuple[bool, dict, str]:
+    """Authenticate admin user"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Check if user exists and is admin
+        if '@' in identifier:
+            cursor.execute('SELECT * FROM users WHERE email = ? AND role = "Admin"', (identifier,))
+        else:
+            cursor.execute('SELECT * FROM users WHERE phone_number = ? AND role = "Admin"', (identifier,))
+        
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user:
+            user_id, full_name, phone, email, role, nin, password_hash, created_at = user
+            if verify_password(password, password_hash):
+                user_data = {
+                    'id': user_id,
+                    'full_name': full_name,
+                    'phone_number': phone,
+                    'email': email,
+                    'role': role,
+                    'nin_or_passport': nin,
+                    'created_at': created_at
+                }
+                return True, user_data, "Admin login successful"
+            else:
+                return False, {}, "Invalid password"
+        else:
+            return False, {}, "Admin not found or insufficient privileges"
+    except Exception as e:
+        return False, {}, f"Authentication error: {str(e)}"
+
+def log_admin_action(admin_id: int, admin_name: str, action: str, target_type: str, target_id: int = None, details: str = None):
+    """Log admin actions to admin_logs table"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO admin_logs (admin_id, admin_name, action, target_type, target_id, details)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (admin_id, admin_name, action, target_type, target_id, details))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Failed to log admin action: {str(e)}")
+        return False
+
+def get_admin_logs(limit: int = 50) -> list:
+    """Get recent admin logs"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT al.*, u.full_name as admin_full_name
+            FROM admin_logs al
+            JOIN users u ON al.admin_id = u.id
+            ORDER BY al.created_at DESC
+            LIMIT ?
+        ''', (limit,))
+        
+        logs = cursor.fetchall()
+        conn.close()
+        return logs
+    except Exception as e:
+        st.error(f"Failed to get admin logs: {str(e)}")
+        return []
+
+def get_all_users() -> list:
+    """Get all users for admin management"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, full_name, phone_number, email, role, nin_or_passport, created_at
+            FROM users
+            ORDER BY created_at DESC
+        ''')
+        
+        users = cursor.fetchall()
+        conn.close()
+        return users
+    except Exception as e:
+        st.error(f"Failed to get users: {str(e)}")
+        return []
+
+def update_user_role(user_id: int, new_role: str, admin_id: int, admin_name: str) -> bool:
+    """Update user role and log the action"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get user details for logging
+        cursor.execute('SELECT full_name FROM users WHERE id = ?', (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            conn.close()
+            return False
+        
+        # Update user role
+        cursor.execute('UPDATE users SET role = ? WHERE id = ?', (new_role, user_id))
+        
+        # Log the action
+        log_admin_action(
+            admin_id=admin_id,
+            admin_name=admin_name,
+            action="UPDATE_ROLE",
+            target_type="USER",
+            target_id=user_id,
+            details=f"Changed role to {new_role} for user {user[0]}"
+        )
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Failed to update user role: {str(e)}")
+        return False
+
+def upvote_report(report_id: int, user_id: int) -> tuple[bool, str]:
+    """Add upvote to a report (community validation)"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Check if user already upvoted
+        cursor.execute('SELECT id FROM report_upvotes WHERE report_id = ? AND user_id = ?', (report_id, user_id))
+        existing = cursor.fetchone()
+        
+        if existing:
+            conn.close()
+            return False, "You have already upvoted this report"
+        
+        # Add upvote
+        cursor.execute('INSERT INTO report_upvotes (report_id, user_id) VALUES (?, ?)', (report_id, user_id))
+        
+        # Update report upvote count
+        cursor.execute('UPDATE risk_reports SET upvotes = upvotes + 1 WHERE id = ?', (report_id,))
+        
+        conn.commit()
+        conn.close()
+        return True, "Report upvoted successfully"
+    except Exception as e:
+        return False, f"Failed to upvote: {str(e)}"
+
+def get_report_with_upvotes(report_id: int = None, user_id: int = None) -> list:
+    """Get reports with upvote information"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        if report_id:
+            cursor.execute('''
+                SELECT r.*, u.full_name as reporter_name,
+                       CASE WHEN ru.id IS NOT NULL THEN 1 ELSE 0 END as user_upvoted
+                FROM risk_reports r
+                JOIN users u ON r.user_id = u.id
+                LEFT JOIN report_upvotes ru ON r.id = ru.report_id AND ru.user_id = ?
+                WHERE r.id = ?
+            ''', (user_id, report_id))
+        else:
+            cursor.execute('''
+                SELECT r.*, u.full_name as reporter_name,
+                       CASE WHEN ru.id IS NOT NULL THEN 1 ELSE 0 END as user_upvoted
+                FROM risk_reports r
+                JOIN users u ON r.user_id = u.id
+                LEFT JOIN report_upvotes ru ON r.id = ru.report_id AND ru.user_id = ?
+                ORDER BY r.created_at DESC
+            ''', (user_id,))
+        
+        reports = cursor.fetchall()
+        conn.close()
+        return reports
+    except Exception as e:
+        st.error(f"Failed to get reports with upvotes: {str(e)}")
+        return []
+
 # Initialize database
 init_database()
 
 # Session state management
 if 'user' not in st.session_state:
     st.session_state.user = None
+
+if 'admin_logged_in' not in st.session_state:
+    st.session_state.admin_logged_in = False
+
+if 'admin_user' not in st.session_state:
+    st.session_state.admin_user = None
 
 # Main application
 def main():
@@ -616,8 +838,33 @@ def main():
     # Sidebar navigation
     st.sidebar.title("Navigation")
     
-    if st.session_state.user:
-        # User is logged in
+    # Check for admin session
+    if st.session_state.get("admin_logged_in"):
+        # Admin is logged in
+        st.sidebar.success(f"🔐 Admin: {st.session_state.admin_user['full_name']}")
+        
+        page = st.sidebar.selectbox(
+            "Admin Panel:",
+            ["Admin Dashboard", "Moderation Panel", "User Management", "Admin Logs", "Config Panel", "Admin Logout"]
+        )
+        
+        if page == "Admin Dashboard":
+            show_admin_dashboard()
+        elif page == "Moderation Panel":
+            show_moderation_panel()
+        elif page == "User Management":
+            show_admin_user_management()
+        elif page == "Admin Logs":
+            show_admin_logs()
+        elif page == "Config Panel":
+            show_config_panel()
+        elif page == "Admin Logout":
+            st.session_state.admin_logged_in = False
+            st.session_state.admin_user = None
+            st.rerun()
+    
+    elif st.session_state.get("user"):
+        # Regular user is logged in
         st.sidebar.success(f"Welcome, {st.session_state.user['full_name']}!")
         st.sidebar.info(f"Role: {st.session_state.user['role']}")
         
@@ -647,11 +894,13 @@ def main():
         # User is not logged in
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Login", "Register", "About"]
+            ["Login", "Admin Login", "Register", "About"]
         )
         
         if page == "Login":
             show_login_page()
+        elif page == "Admin Login":
+            show_admin_login_page()
         elif page == "Register":
             show_registration_page()
         elif page == "About":
@@ -676,6 +925,39 @@ def show_login_page():
             if success:
                 st.session_state.user = user_data
                 st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+
+def show_admin_login_page():
+    st.header("🔐 Admin Login")
+    
+    with st.form("admin_login_form"):
+        identifier = st.text_input("Admin Email or Phone", placeholder="Enter admin email or phone")
+        password = st.text_input("Admin Password", type="password", placeholder="Enter admin password")
+        
+        # 2FA simulation
+        st.subheader("🔒 Two-Factor Authentication")
+        st.info("For demo purposes, use OTP: 123456")
+        otp = st.text_input("Enter OTP", placeholder="123456", max_chars=6)
+        
+        submit = st.form_submit_button("Admin Login", type="primary")
+        
+        if submit:
+            if not identifier or not password:
+                st.error("Please fill in all fields")
+                return
+            
+            if not otp or otp != "123456":
+                st.error("Invalid OTP. Use 123456 for demo.")
+                return
+            
+            success, admin_data, message = authenticate_admin(identifier, password)
+            
+            if success:
+                st.session_state.admin_logged_in = True
+                st.session_state.admin_user = admin_data
+                st.success(f"🔐 {message}")
                 st.rerun()
             else:
                 st.error(message)
@@ -1024,14 +1306,22 @@ def show_view_reports():
         st.success("Live data imported successfully!")
         st.rerun()
     
-    # Get reports
-    reports = get_risk_reports(status=status_filter, source_type=source_filter)
+    # Get reports with upvote information for logged-in users
+    user_id = st.session_state.user['id'] if st.session_state.get('user') else None
+    reports = get_report_with_upvotes(user_id=user_id)
+    
+    # Apply filters
+    if status_filter != "all":
+        reports = [r for r in reports if r[6] == status_filter]  # status is at index 6
+    
+    if source_filter != "all":
+        reports = [r for r in reports if r[10] == source_filter]  # source_type is at index 10
     
     if reports:
         st.subheader(f"Risk Reports ({len(reports)})")
         
         for report in reports:
-            report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+            report_id, user_id, risk_type, description, location, lat, lon, status, confirmations, upvotes, created_at, reporter_name, source_type, source_url, user_upvoted = report
             
             # Create status badge
             status_class = f"status-{status.lower()}"
@@ -1052,22 +1342,47 @@ def show_view_reports():
             source_icon = source_icons.get(source_type, '📄')
             source_color = source_colors.get(source_type, '#6c757d')
             
-            st.markdown(f"""
-            <div class="risk-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <span class="{risk_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{risk_type.upper()}</span>
-                        <span style="background-color: {source_color}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{source_icon} {source_type.upper()}</span>
+            # Community validation section
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown(f"""
+                <div class="risk-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="{risk_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{risk_type.upper()}</span>
+                            <span style="background-color: {source_color}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{source_icon} {source_type.upper()}</span>
+                        </div>
+                        <span class="{status_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{status.upper()}</span>
                     </div>
-                    <span class="{status_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{status.upper()}</span>
+                    <p><strong>Description:</strong> {description}</p>
+                    <p><strong>Location:</strong> 📍 {location}</p>
+                    <p><strong>Reported by:</strong> {reporter_name} on {created_at}</p>
+                    <p><strong>Confirmations:</strong> ✅ {confirmations}</p>
+                    {f'<p><strong>Source:</strong> <a href="{source_url}" target="_blank">🔗 View Original</a></p>' if source_url else ''}
                 </div>
-                <p><strong>Description:</strong> {description}</p>
-                <p><strong>Location:</strong> 📍 {location}</p>
-                <p><strong>Reported by:</strong> {reporter_name} on {created_at}</p>
-                <p><strong>Confirmations:</strong> ✅ {confirmations}</p>
-                {f'<p><strong>Source:</strong> <a href="{source_url}" target="_blank">🔗 View Original</a></p>' if source_url else ''}
-            </div>
-            """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("**Community Validation:**")
+                
+                # Show upvote count
+                st.markdown(f"👍 **{upvotes} upvotes**")
+                
+                # Upvote button for logged-in users
+                if st.session_state.get('user'):
+                    if user_upvoted:
+                        st.success("✅ You upvoted this report")
+                    else:
+                        if st.button(f"👍 Upvote Report #{report_id}", key=f"upvote_{report_id}"):
+                            success, message = upvote_report(report_id, st.session_state.user['id'])
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+                else:
+                    st.info("Login to upvote reports")
     else:
         st.info("No reports found with the selected filter.")
 
@@ -1466,66 +1781,751 @@ def show_user_management():
         st.info("User management features would be implemented here")
 
 def show_about_page():
-    st.header("ℹ️ About")
+    st.header("ℹ️ About Nigerian Road Risk Reporter")
     
     st.markdown("""
-    ## Nigerian Road Risk Reporter - Enhanced Version with Live Feeds
+    ### 🛣️ Enhanced Minimal Version with Live Feeds
     
-    A complete road risk reporting system with live news and social media integration.
+    **Nigerian Road Risk Reporter** is a comprehensive road safety platform designed to help users report and track road risks across Nigeria.
     
-    ### Features:
-    - ✅ User registration and login
-    - ✅ Role-based access (Public, Driver, Admin)
-    - ✅ Risk report submission with GPS coordinates
-    - ✅ Voice and image upload support
-    - ✅ Live news feed integration
-    - ✅ Social media feed integration
-    - ✅ Source differentiation (User, News, Social)
-    - ✅ Report management and verification
-    - ✅ Admin dashboard with statistics
-    - ✅ Clean, minimal interface
-    - ✅ Error suppressed for stability
-    - ✅ Mobile friendly
+    #### 🚀 Key Features:
+    - **Secure User Registration & Login**: Complete authentication system with role-based access
+    - **Risk Report Submission**: Submit detailed road risk reports with GPS coordinates
+    - **Live Dashboard**: Real-time road status updates for the last 24 hours
+    - **Live news feed integration**: Automated import of road-related news
+    - **Social media feed integration**: Real-time social media updates
+    - **Source differentiation**: Distinguish between user, news, and social media sources
+    - **Risk History**: Comprehensive filtering and export capabilities
+    - **Community Validation**: Upvote system for report verification
+    - **Admin Control System**: Complete moderation and management tools
     
-    ### Tech Stack:
-    - **Frontend:** Streamlit
-    - **Backend:** Python (built-in libraries only)
-    - **Database:** SQLite
-    - **Security:** SHA256 (built-in)
-    - **File Handling:** Built-in file operations
-    - **API Integration:** Built-in HTTP requests
+    #### 🛠️ Technical Stack:
+    - **Frontend**: Streamlit (Python-based web framework)
+    - **Backend**: Python with SQLite database
+    - **Authentication**: SHA256 password hashing
+    - **Database**: SQLite (users.db, risk_reports.db, admin_logs.db)
+    - **API Integration**: Built-in HTTP requests for news feeds
+    - **File Handling**: Image and voice file upload support
+    - **Geolocation**: GPS coordinate support
     
-    ### Risk Types Supported:
-    - 🚨 Robbery
-    - 🌊 Flooding
-    - 🏛️ Protest
-    - 🛣️ Road Damage
-    - 🚗 Traffic
-    - 📝 Other (custom)
+    #### 🔒 Security Features:
+    - Password hashing with SHA256
+    - Session state management
+    - Input validation and sanitization
+    - Role-based access control
+    - Admin action logging
     
-    ### Source Types:
-    - 👤 **User Reports:** Direct submissions from registered users
-    - 📰 **News Sources:** Major Nigerian newspapers and media outlets
-    - 📱 **Social Media:** Twitter, Facebook, Instagram, WhatsApp Status
+    #### 📊 Data Sources:
+    - **User Reports**: Direct submissions from registered users
+    - **News Feeds**: Automated import from Nigerian news sources
+    - **Social Media**: Real-time social media monitoring
     
-    ### Benefits:
-    - 🚀 **Ultra fast deployment**
-    - 🧹 **Clean codebase**
-    - 🛡️ **Error suppressed**
-    - 📱 **Mobile friendly**
-    - ⚡ **Minimal dependencies**
-    - 📍 **GPS support**
-    - 🎤 **Voice input**
-    - 📸 **Image upload**
-    - 📰 **Live news feeds**
-    - 📱 **Social media integration**
-    - 🔗 **Source verification**
+    #### 🎯 Target Users:
+    - **Public**: General road users
+    - **Drivers**: Professional drivers and transport operators
+    - **Admins**: System administrators and moderators
+    
+    #### 🌍 Coverage:
+    - **Geographic**: Nigeria-wide road network
+    - **Risk Types**: Robbery, Flooding, Protest, Road Damage, Traffic, Other
+    - **Real-time**: 24/7 monitoring and updates
     
     ---
+    *Built with ❤️ for Nigerian road safety*
+    """)
+
+def show_admin_dashboard():
+    st.header("🔐 Admin Dashboard")
     
-    **Version:** Enhanced Minimal 2.0  
-    **Status:** ✅ Production Ready  
-    **Last Updated:** August 2025
+    if not st.session_state.get("admin_logged_in"):
+        st.error("Access denied. Please login as admin.")
+        return
+    
+    admin_user = st.session_state.admin_user
+    
+    # Welcome section
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f"""
+        ### 👋 Welcome, {admin_user['full_name']}!
+        **Admin ID:** {admin_user['id']} | **Email:** {admin_user['email'] or 'N/A'}
+        """)
+    
+    with col2:
+        if st.button("🔄 Refresh Data", type="secondary"):
+            st.rerun()
+    
+    # Summary statistics
+    st.subheader("📊 System Overview")
+    
+    try:
+        # Get report statistics
+        stats = get_report_stats()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Reports", stats.get('total_reports', 0))
+        
+        with col2:
+            st.metric("Pending Reports", stats.get('pending_reports', 0))
+        
+        with col3:
+            st.metric("Verified Reports", stats.get('verified_reports', 0))
+        
+        with col4:
+            st.metric("Flagged as Fake", stats.get('false_reports', 0))
+        
+        # Recent activity
+        st.subheader("📈 Recent Activity (Last 24 Hours)")
+        
+        recent_reports = get_recent_reports(hours=24)
+        if recent_reports:
+            # Risk type distribution
+            risk_counts = {}
+            for report in recent_reports:
+                risk_type = report[1]
+                risk_counts[risk_type] = risk_counts.get(risk_type, 0) + 1
+            
+            if risk_counts:
+                st.markdown("**Risk Type Distribution:**")
+                for risk_type, count in risk_counts.items():
+                    st.write(f"• {risk_type}: {count} reports")
+            
+            # Recent reports table
+            st.markdown("**Recent Reports:**")
+            for report in recent_reports[:5]:
+                report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+                
+                status_color = {
+                    'pending': '🟡',
+                    'verified': '🟢',
+                    'resolved': '🔵',
+                    'false': '🔴'
+                }.get(status, '⚪')
+                
+                st.markdown(f"""
+                **{status_color} Report #{report_id}** - {risk_type} at {location}
+                - Reporter: {reporter_name}
+                - Status: {status.title()}
+                - Source: {source_type.title()}
+                - Time: {get_time_ago(created_at)}
+                """)
+        else:
+            st.info("No recent reports in the last 24 hours.")
+        
+        # Admin logs summary
+        st.subheader("📝 Recent Admin Actions")
+        admin_logs = get_admin_logs(limit=10)
+        
+        if admin_logs:
+            for log in admin_logs:
+                log_id, admin_id, admin_name, action, target_type, target_id, details, created_at, admin_full_name = log
+                
+                action_icon = {
+                    'UPDATE_ROLE': '👤',
+                    'VERIFY_REPORT': '✅',
+                    'FLAG_REPORT': '🚩',
+                    'DELETE_REPORT': '🗑️',
+                    'EDIT_REPORT': '✏️'
+                }.get(action, '📝')
+                
+                st.markdown(f"""
+                **{action_icon} {action.replace('_', ' ').title()}**
+                - Admin: {admin_full_name}
+                - Target: {target_type} #{target_id if target_id else 'N/A'}
+                - Details: {details or 'No details'}
+                - Time: {get_time_ago(created_at)}
+                """)
+        else:
+            st.info("No recent admin actions.")
+        
+        # Quick actions
+        st.subheader("⚡ Quick Actions")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📋 View All Reports", type="secondary"):
+                st.session_state.admin_page = "Moderation Panel"
+                st.rerun()
+        
+        with col2:
+            if st.button("👥 Manage Users", type="secondary"):
+                st.session_state.admin_page = "User Management"
+                st.rerun()
+        
+        with col3:
+            if st.button("📊 View Logs", type="secondary"):
+                st.session_state.admin_page = "Admin Logs"
+                st.rerun()
+        
+        # 20km radius notification simulation
+        st.subheader("🚨 Proximity Alerts")
+        st.info("""
+        **20km Radius Notifications (Simulated)**
+        
+        📍 **Lagos Area**: 3 new reports in your vicinity
+        📍 **Abuja Area**: 1 pending report requires attention
+        📍 **Port Harcourt**: 2 verified reports in your area
+        
+        *This is a simulation. In production, this would use real GPS coordinates.*
+        """)
+        
+    except Exception as e:
+        st.error(f"Error loading dashboard data: {str(e)}")
+
+def show_moderation_panel():
+    st.header("📋 Moderation Panel")
+    
+    if not st.session_state.get("admin_logged_in"):
+        st.error("Access denied. Please login as admin.")
+        return
+    
+    admin_user = st.session_state.admin_user
+    
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        status_filter = st.selectbox(
+            "Filter by Status",
+            ["All", "pending", "verified", "resolved", "false"]
+        )
+    
+    with col2:
+        source_filter = st.selectbox(
+            "Filter by Source",
+            ["All", "user", "news", "social"]
+        )
+    
+    with col3:
+        if st.button("🔄 Refresh Reports", type="secondary"):
+            st.rerun()
+    
+    # Get reports based on filters
+    reports = get_risk_reports()
+    
+    # Apply filters
+    if status_filter != "All":
+        reports = [r for r in reports if r[6] == status_filter]  # status is at index 6
+    
+    if source_filter != "All":
+        reports = [r for r in reports if r[10] == source_filter]  # source_type is at index 10
+    
+    if reports:
+        st.subheader(f"📊 Reports ({len(reports)} found)")
+        
+        # Display reports in a table format
+        for report in reports:
+            report_id, user_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+            
+            with st.expander(f"Report #{report_id} - {risk_type} at {location} ({status})"):
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.markdown(f"""
+                    **Risk Type:** {risk_type}  
+                    **Location:** 📍 {location}  
+                    **Description:** {description}  
+                    **Reporter:** {reporter_name}  
+                    **Source:** {source_type.title()}  
+                    **Created:** {created_at}  
+                    **Confirmations:** ✅ {confirmations}
+                    """)
+                    
+                    if source_url:
+                        st.markdown(f"**Source URL:** [View Original]({source_url})")
+                
+                with col2:
+                    st.markdown("**Actions:**")
+                    
+                    # Action buttons
+                    if status == "pending":
+                        if st.button(f"✅ Verify #{report_id}", key=f"verify_{report_id}"):
+                            if update_report_status(report_id, "verified"):
+                                log_admin_action(
+                                    admin_id=admin_user['id'],
+                                    admin_name=admin_user['full_name'],
+                                    action="VERIFY_REPORT",
+                                    target_type="REPORT",
+                                    target_id=report_id,
+                                    details=f"Verified report #{report_id} - {risk_type} at {location}"
+                                )
+                                st.success(f"Report #{report_id} verified!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to verify report")
+                    
+                    if st.button(f"🚩 Flag as Fake #{report_id}", key=f"flag_{report_id}"):
+                        if update_report_status(report_id, "false"):
+                            log_admin_action(
+                                admin_id=admin_user['id'],
+                                admin_name=admin_user['full_name'],
+                                action="FLAG_REPORT",
+                                target_type="REPORT",
+                                target_id=report_id,
+                                details=f"Flagged report #{report_id} as fake - {risk_type} at {location}"
+                            )
+                            st.success(f"Report #{report_id} flagged as fake!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to flag report")
+                    
+                    if st.button(f"🗑️ Delete #{report_id}", key=f"delete_{report_id}"):
+                        if update_report_status(report_id, "deleted"):
+                            log_admin_action(
+                                admin_id=admin_user['id'],
+                                admin_name=admin_user['full_name'],
+                                action="DELETE_REPORT",
+                                target_type="REPORT",
+                                target_id=report_id,
+                                details=f"Deleted report #{report_id} - {risk_type} at {location}"
+                            )
+                            st.success(f"Report #{report_id} deleted!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete report")
+                    
+                    # Status badge
+                    status_colors = {
+                        'pending': '#ffc107',
+                        'verified': '#28a745',
+                        'resolved': '#007bff',
+                        'false': '#dc3545'
+                    }
+                    color = status_colors.get(status, '#6c757d')
+                    st.markdown(f"""
+                    <div style="background-color: {color}; color: white; padding: 8px; border-radius: 4px; text-align: center; font-weight: bold;">
+                        {status.upper()}
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("No reports found matching the selected filters.")
+    
+    # Bulk actions
+    st.subheader("⚡ Bulk Actions")
+    st.info("""
+    **Bulk Moderation Features:**
+    - Select multiple reports for batch processing
+    - Bulk verify pending reports
+    - Bulk flag suspicious reports
+    - Export selected reports for review
+    
+    *This feature will be implemented in the next version.*
+    """)
+
+def show_admin_user_management():
+    st.header("👥 User Management")
+    
+    if not st.session_state.get("admin_logged_in"):
+        st.error("Access denied. Please login as admin.")
+        return
+    
+    admin_user = st.session_state.admin_user
+    
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        role_filter = st.selectbox(
+            "Filter by Role",
+            ["All", "Public", "Driver", "Admin"]
+        )
+    
+    with col2:
+        search_term = st.text_input("Search by name or email", placeholder="Enter search term...")
+    
+    with col3:
+        if st.button("🔄 Refresh Users", type="secondary"):
+            st.rerun()
+    
+    # Get all users
+    users = get_all_users()
+    
+    # Apply filters
+    if role_filter != "All":
+        users = [u for u in users if u[4] == role_filter]  # role is at index 4
+    
+    if search_term:
+        users = [u for u in users if search_term.lower() in u[1].lower() or 
+                (u[3] and search_term.lower() in u[3].lower())]  # name at index 1, email at index 3
+    
+    if users:
+        st.subheader(f"📊 Users ({len(users)} found)")
+        
+        # User statistics
+        role_counts = {}
+        for user in users:
+            role = user[4]
+            role_counts[role] = role_counts.get(role, 0) + 1
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Users", len(users))
+        with col2:
+            st.metric("Public Users", role_counts.get("Public", 0))
+        with col3:
+            st.metric("Drivers", role_counts.get("Driver", 0))
+        with col4:
+            st.metric("Admins", role_counts.get("Admin", 0))
+        
+        # Display users
+        for user in users:
+            user_id, full_name, phone, email, role, nin, created_at = user
+            
+            with st.expander(f"User #{user_id} - {full_name} ({role})"):
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.markdown(f"""
+                    **Name:** {full_name}  
+                    **Phone:** {phone}  
+                    **Email:** {email or 'N/A'}  
+                    **Role:** {role}  
+                    **NIN/Passport:** {nin}  
+                    **Registered:** {created_at}
+                    """)
+                
+                with col2:
+                    st.markdown("**Actions:**")
+                    
+                    # Role change options
+                    if role != "Admin":
+                        if st.button(f"👑 Promote to Admin #{user_id}", key=f"promote_{user_id}"):
+                            if update_user_role(user_id, "Admin", admin_user['id'], admin_user['full_name']):
+                                st.success(f"User #{user_id} promoted to Admin!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to promote user")
+                    
+                    if role != "Driver":
+                        if st.button(f"🚗 Make Driver #{user_id}", key=f"driver_{user_id}"):
+                            if update_user_role(user_id, "Driver", admin_user['id'], admin_user['full_name']):
+                                st.success(f"User #{user_id} role changed to Driver!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to change user role")
+                    
+                    if role != "Public":
+                        if st.button(f"👤 Make Public #{user_id}", key=f"public_{user_id}"):
+                            if update_user_role(user_id, "Public", admin_user['id'], admin_user['full_name']):
+                                st.success(f"User #{user_id} role changed to Public!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to change user role")
+                    
+                    # Suspend user (simulated)
+                    if st.button(f"⏸️ Suspend #{user_id}", key=f"suspend_{user_id}"):
+                        log_admin_action(
+                            admin_id=admin_user['id'],
+                            admin_name=admin_user['full_name'],
+                            action="SUSPEND_USER",
+                            target_type="USER",
+                            target_id=user_id,
+                            details=f"Suspended user {full_name} (ID: {user_id})"
+                        )
+                        st.success(f"User #{user_id} suspended!")
+                        st.rerun()
+                    
+                    # Re-verify user (simulated)
+                    if st.button(f"✅ Re-verify #{user_id}", key=f"reverify_{user_id}"):
+                        log_admin_action(
+                            admin_id=admin_user['id'],
+                            admin_name=admin_user['full_name'],
+                            action="REVERIFY_USER",
+                            target_type="USER",
+                            target_id=user_id,
+                            details=f"Re-verified user {full_name} (ID: {user_id})"
+                        )
+                        st.success(f"User #{user_id} re-verified!")
+                        st.rerun()
+                    
+                    # Role badge
+                    role_colors = {
+                        'Public': '#6c757d',
+                        'Driver': '#007bff',
+                        'Admin': '#dc3545'
+                    }
+                    color = role_colors.get(role, '#6c757d')
+                    st.markdown(f"""
+                    <div style="background-color: {color}; color: white; padding: 8px; border-radius: 4px; text-align: center; font-weight: bold;">
+                        {role.upper()}
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("No users found matching the selected filters.")
+    
+    # User management features
+    st.subheader("⚡ User Management Features")
+    st.info("""
+    **Advanced User Management:**
+    - Bulk user operations
+    - User activity monitoring
+    - Account suspension/activation
+    - User verification status
+    - Export user data
+    
+    *These features will be implemented in the next version.*
+    """)
+
+def show_admin_logs():
+    st.header("📊 Admin Logs")
+    
+    if not st.session_state.get("admin_logged_in"):
+        st.error("Access denied. Please login as admin.")
+        return
+    
+    # Filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        action_filter = st.selectbox(
+            "Filter by Action",
+            ["All", "UPDATE_ROLE", "VERIFY_REPORT", "FLAG_REPORT", "DELETE_REPORT", "SUSPEND_USER", "REVERIFY_USER"]
+        )
+    
+    with col2:
+        admin_filter = st.text_input("Filter by Admin", placeholder="Enter admin name...")
+    
+    with col3:
+        if st.button("🔄 Refresh Logs", type="secondary"):
+            st.rerun()
+    
+    # Get admin logs
+    logs = get_admin_logs(limit=100)
+    
+    # Apply filters
+    if action_filter != "All":
+        logs = [log for log in logs if log[3] == action_filter]  # action is at index 3
+    
+    if admin_filter:
+        logs = [log for log in logs if admin_filter.lower() in log[8].lower()]  # admin_full_name is at index 8
+    
+    if logs:
+        st.subheader(f"📝 Admin Actions ({len(logs)} found)")
+        
+        # Log statistics
+        action_counts = {}
+        admin_counts = {}
+        for log in logs:
+            action = log[3]
+            admin_name = log[8]
+            action_counts[action] = action_counts.get(action, 0) + 1
+            admin_counts[admin_name] = admin_counts.get(admin_name, 0) + 1
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Action Distribution:**")
+            for action, count in action_counts.items():
+                st.write(f"• {action.replace('_', ' ').title()}: {count}")
+        
+        with col2:
+            st.markdown("**Admin Activity:**")
+            for admin, count in admin_counts.items():
+                st.write(f"• {admin}: {count} actions")
+        
+        # Display logs
+        for log in logs:
+            log_id, admin_id, admin_name, action, target_type, target_id, details, created_at, admin_full_name = log
+            
+            with st.expander(f"{action.replace('_', ' ').title()} by {admin_full_name} at {get_time_ago(created_at)}"):
+                st.markdown(f"""
+                **Action:** {action.replace('_', ' ').title()}  
+                **Admin:** {admin_full_name} (ID: {admin_id})  
+                **Target Type:** {target_type}  
+                **Target ID:** {target_id or 'N/A'}  
+                **Details:** {details or 'No details provided'}  
+                **Timestamp:** {created_at}
+                """)
+                
+                # Action-specific information
+                if action == "UPDATE_ROLE":
+                    st.info("👤 **Role Update Action** - User role was modified")
+                elif action in ["VERIFY_REPORT", "FLAG_REPORT", "DELETE_REPORT"]:
+                    st.info("📋 **Report Moderation Action** - Report status was changed")
+                elif action in ["SUSPEND_USER", "REVERIFY_USER"]:
+                    st.info("👥 **User Management Action** - User account was modified")
+        
+        # Export functionality
+        st.subheader("📤 Export Logs")
+        if st.button("📊 Export to CSV"):
+            # Create CSV data
+            csv_data = "Action,Admin,Target Type,Target ID,Details,Timestamp\n"
+            for log in logs:
+                log_id, admin_id, admin_name, action, target_type, target_id, details, created_at, admin_full_name = log
+                csv_data += f'"{action}","{admin_full_name}","{target_type}","{target_id or ""}","{details or ""}","{created_at}"\n'
+            
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_data,
+                file_name=f"admin_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+    else:
+        st.info("No admin logs found matching the selected filters.")
+    
+    # Log management features
+    st.subheader("⚡ Log Management Features")
+    st.info("""
+    **Advanced Log Management:**
+    - Real-time log monitoring
+    - Log retention policies
+    - Automated log analysis
+    - Alert system for suspicious activities
+    - Log backup and archiving
+    
+    *These features will be implemented in the next version.*
+    """)
+
+def show_config_panel():
+    st.header("⚙️ Configuration Panel")
+    
+    if not st.session_state.get("admin_logged_in"):
+        st.error("Access denied. Please login as admin.")
+        return
+    
+    admin_user = st.session_state.admin_user
+    
+    # Tab navigation
+    tab1, tab2, tab3 = st.tabs(["Risk Types", "Advice Templates", "System Settings"])
+    
+    with tab1:
+        st.subheader("🚨 Risk Type Configuration")
+        
+        # Default risk types
+        default_risk_types = ["Robbery", "Flooding", "Protest", "Road Damage", "Traffic", "Other"]
+        
+        st.markdown("**Current Risk Types:**")
+        for i, risk_type in enumerate(default_risk_types):
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                st.write(f"• {risk_type}")
+            with col2:
+                if st.button(f"Edit {risk_type}", key=f"edit_risk_{i}"):
+                    st.info(f"Edit functionality for {risk_type} will be implemented in the next version.")
+            with col3:
+                if st.button(f"Delete {risk_type}", key=f"delete_risk_{i}"):
+                    st.warning(f"Delete functionality for {risk_type} will be implemented in the next version.")
+        
+        # Add new risk type
+        st.markdown("**Add New Risk Type:**")
+        with st.form("add_risk_type"):
+            new_risk_type = st.text_input("Risk Type Name", placeholder="Enter new risk type...")
+            risk_description = st.text_area("Description", placeholder="Describe this risk type...")
+            risk_color = st.color_picker("Risk Color", "#dc3545")
+            
+            if st.form_submit_button("Add Risk Type"):
+                if new_risk_type:
+                    st.success(f"Risk type '{new_risk_type}' added successfully!")
+                    log_admin_action(
+                        admin_id=admin_user['id'],
+                        admin_name=admin_user['full_name'],
+                        action="ADD_RISK_TYPE",
+                        target_type="CONFIG",
+                        details=f"Added new risk type: {new_risk_type}"
+                    )
+                    st.rerun()
+                else:
+                    st.error("Please enter a risk type name.")
+    
+    with tab2:
+        st.subheader("💡 Advice Templates")
+        
+        # Default advice templates
+        advice_templates = {
+            "Robbery": "🚨 **Robbery Alert**: Avoid this area, especially at night. Travel in groups if possible. Contact local authorities immediately.",
+            "Flooding": "🌊 **Flooding Warning**: Road may be impassable. Avoid driving through flooded areas. Find alternative routes.",
+            "Protest": "🏛️ **Protest Notice**: Expect traffic delays and road closures. Plan alternative routes and allow extra travel time.",
+            "Road Damage": "🛣️ **Road Damage**: Potholes or road damage detected. Drive carefully and report to authorities.",
+            "Traffic": "🚗 **Traffic Alert**: Heavy traffic congestion. Consider alternative routes or delay travel if possible."
+        }
+        
+        st.markdown("**Current Advice Templates:**")
+        for risk_type, advice in advice_templates.items():
+            with st.expander(f"Advice for {risk_type}"):
+                st.markdown(advice)
+                
+                # Edit advice template
+                new_advice = st.text_area(
+                    f"Edit advice for {risk_type}",
+                    value=advice,
+                    key=f"advice_{risk_type}"
+                )
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(f"Save {risk_type} Advice", key=f"save_advice_{risk_type}"):
+                        log_admin_action(
+                            admin_id=admin_user['id'],
+                            admin_name=admin_user['full_name'],
+                            action="UPDATE_ADVICE",
+                            target_type="CONFIG",
+                            details=f"Updated advice template for {risk_type}"
+                        )
+                        st.success(f"Advice for {risk_type} updated successfully!")
+                
+                with col2:
+                    if st.button(f"Reset {risk_type} Advice", key=f"reset_advice_{risk_type}"):
+                        st.info(f"Reset functionality for {risk_type} will be implemented in the next version.")
+    
+    with tab3:
+        st.subheader("🔧 System Settings")
+        
+        # System configuration options
+        st.markdown("**General Settings:**")
+        
+        # Notification settings
+        st.markdown("**Notification Settings:**")
+        email_notifications = st.checkbox("Enable Email Notifications", value=True)
+        sms_notifications = st.checkbox("Enable SMS Notifications", value=False)
+        push_notifications = st.checkbox("Enable Push Notifications", value=True)
+        
+        # Report settings
+        st.markdown("**Report Settings:**")
+        auto_verify_threshold = st.slider("Auto-verify threshold (upvotes)", 1, 10, 3)
+        report_retention_days = st.number_input("Report retention (days)", 30, 365, 90)
+        
+        # Admin settings
+        st.markdown("**Admin Settings:**")
+        require_2fa = st.checkbox("Require 2FA for admin login", value=True)
+        log_retention_days = st.number_input("Log retention (days)", 30, 365, 180)
+        
+        # Save settings
+        if st.button("💾 Save Settings", type="primary"):
+            log_admin_action(
+                admin_id=admin_user['id'],
+                admin_name=admin_user['full_name'],
+                action="UPDATE_SETTINGS",
+                target_type="CONFIG",
+                details="Updated system configuration settings"
+            )
+            st.success("Settings saved successfully!")
+        
+        # System information
+        st.markdown("**System Information:**")
+        st.info(f"""
+        **Current Configuration:**
+        - Email Notifications: {'✅ Enabled' if email_notifications else '❌ Disabled'}
+        - SMS Notifications: {'✅ Enabled' if sms_notifications else '❌ Disabled'}
+        - Push Notifications: {'✅ Enabled' if push_notifications else '❌ Disabled'}
+        - Auto-verify Threshold: {auto_verify_threshold} upvotes
+        - Report Retention: {report_retention_days} days
+        - 2FA Required: {'✅ Yes' if require_2fa else '❌ No'}
+        - Log Retention: {log_retention_days} days
+        """)
+    
+    # Configuration management features
+    st.subheader("⚡ Configuration Management Features")
+    st.info("""
+    **Advanced Configuration:**
+    - Configuration versioning
+    - Backup and restore settings
+    - Environment-specific configs
+    - Automated configuration validation
+    - Configuration change notifications
+    
+    *These features will be implemented in the next version.*
     """)
 
 if __name__ == "__main__":

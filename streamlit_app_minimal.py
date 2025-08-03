@@ -633,6 +633,22 @@ def get_time_ago(timestamp_str: str) -> str:
     except Exception:
         return "Unknown time"
 
+def generate_basic_advice(risk_type: str, location: str) -> str:
+    """Generate basic safety advice without external dependencies"""
+    advice_templates = {
+        "Robbery": "🚨 **Robbery Alert**: Avoid this area, especially at night. Travel in groups if possible. Contact local authorities immediately.",
+        "Flooding": "🌊 **Flooding Warning**: Road may be impassable. Avoid driving through flooded areas. Find alternative routes.",
+        "Protest": "🏛️ **Protest Notice**: Expect traffic delays and road closures. Plan alternative routes and allow extra travel time.",
+        "Road Damage": "🛣️ **Road Damage**: Potholes or road damage detected. Drive carefully and report to authorities.",
+        "Traffic": "🚗 **Traffic Alert**: Heavy traffic congestion. Consider alternative routes or delay travel if possible.",
+        "Other": "⚠️ **Road Incident**: Exercise caution in this area. Follow local traffic advisories and authorities."
+    }
+    
+    base_advice = advice_templates.get(risk_type, advice_templates["Other"])
+    emergency_contacts = "\n\n📞 **Emergency Contacts**:\n• Emergency: 0800-112-1199\n• Police: 112"
+    
+    return base_advice + emergency_contacts
+
 # Admin-specific functions
 def authenticate_admin(identifier: str, password: str) -> tuple[bool, dict, str]:
     """Authenticate admin user"""
@@ -1288,7 +1304,16 @@ def show_submit_report():
                             st.warning("⚠️ Could not generate AI advice at this time.")
                             
                     except ImportError:
-                        st.info("ℹ️ AI advice module not available. Install required dependencies.")
+                        # Fallback: Generate basic advice without external dependencies
+                        basic_advice = generate_basic_advice(risk_type, location)
+                        st.markdown(f"""
+                        <div class="info-box">
+                            <h4>⚠️ Basic Safety Advice</h4>
+                            <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
+                                {basic_advice}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                     except Exception as e:
                         st.warning(f"⚠️ Error generating AI advice: {str(e)}")
                 
@@ -2586,8 +2611,23 @@ def show_ai_advice_page():
         from ai_advice import display_advice_interface
         display_advice_interface()
     except ImportError:
-        st.error("AI Advice module not available. Please install required dependencies.")
-        st.info("Required: pip install cryptography")
+        st.warning("🤖 AI Advice module not available in minimal mode.")
+        st.info("ℹ️ Basic safety advice is still available when submitting reports.")
+        st.markdown("""
+        ### Basic Safety Advice Templates
+        
+        **Robbery**: 🚨 Avoid this area, especially at night. Travel in groups if possible.
+        
+        **Flooding**: 🌊 Road may be impassable. Avoid driving through flooded areas.
+        
+        **Protest**: 🏛️ Expect traffic delays and road closures. Plan alternative routes.
+        
+        **Road Damage**: 🛣️ Drive carefully and report to authorities.
+        
+        **Traffic**: 🚗 Heavy traffic congestion. Consider alternative routes.
+        
+        **Other**: ⚠️ Exercise caution in this area. Follow local advisories.
+        """)
 
 def show_analytics_page():
     """Display Analytics Dashboard page"""
@@ -2595,8 +2635,22 @@ def show_analytics_page():
         from analytics_dashboard import main as analytics_main
         analytics_main()
     except ImportError:
-        st.error("Analytics module not available. Please install required dependencies.")
-        st.info("Required: pip install pandas plotly")
+        st.warning("📊 Analytics module not available in minimal mode.")
+        st.info("ℹ️ Basic report statistics are available in the Dashboard.")
+        
+        # Show basic stats from main app
+        try:
+            stats = get_report_stats()
+            if stats:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Reports", stats.get('total_reports', 0))
+                with col2:
+                    st.metric("Verified Reports", stats.get('verified_reports', 0))
+                with col3:
+                    st.metric("Pending Reports", stats.get('pending_reports', 0))
+        except:
+            st.info("No report statistics available.")
 
 def show_security_page():
     """Display Security Settings page"""
@@ -2604,8 +2658,25 @@ def show_security_page():
         from security import main as security_main
         security_main()
     except ImportError:
-        st.error("Security module not available. Please install required dependencies.")
-        st.info("Required: pip install cryptography")
+        st.warning("🔐 Security module not available in minimal mode.")
+        st.info("ℹ️ Basic authentication and session management are still active.")
+        
+        # Show basic security info
+        st.markdown("""
+        ### Current Security Status
+        
+        ✅ **Basic Authentication**: Username/password login
+        ✅ **Session Management**: Secure session handling
+        ✅ **Password Hashing**: SHA256 with salt
+        ✅ **Role-Based Access**: Admin/User/Public roles
+        
+        ### Security Features Available
+        
+        - User registration and login
+        - Password strength validation
+        - Session timeout management
+        - Admin access control
+        """)
 
 def show_deployment_page():
     """Display Deployment & PWA page"""
@@ -2613,8 +2684,33 @@ def show_deployment_page():
         from deploy_app import main as deployment_main
         deployment_main()
     except ImportError:
-        st.error("Deployment module not available. Please install required dependencies.")
-        st.info("Required: pip install cryptography")
+        st.warning("🚀 Deployment module not available in minimal mode.")
+        st.info("ℹ️ App is running in minimal mode on Streamlit Cloud.")
+        
+        # Show deployment status
+        st.markdown("""
+        ### Deployment Status
+        
+        ✅ **Platform**: Streamlit Cloud
+        ✅ **Mode**: Minimal (Core features only)
+        ✅ **Status**: Active and running
+        
+        ### Available Features
+        
+        - User registration and authentication
+        - Risk report submission
+        - Basic safety advice generation
+        - Report viewing and management
+        - Admin dashboard and moderation
+        - Live feeds and risk history
+        
+        ### Enhanced Features (Require Dependencies)
+        
+        - Advanced AI safety advice
+        - Interactive analytics dashboard
+        - Data encryption and security
+        - PWA features and SMS alerts
+        """)
 
 if __name__ == "__main__":
     main() 

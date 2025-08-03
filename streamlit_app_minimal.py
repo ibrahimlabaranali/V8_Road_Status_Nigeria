@@ -870,7 +870,7 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "Logout"]
+            ["Dashboard", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"]
         )
         
         if page == "Dashboard":
@@ -887,6 +887,14 @@ def main():
             show_manage_reports()
         elif page == "User Management":
             show_user_management()
+        elif page == "AI Safety Advice":
+            show_ai_advice_page()
+        elif page == "Analytics Dashboard":
+            show_analytics_page()
+        elif page == "Security Settings":
+            show_security_page()
+        elif page == "Deployment & PWA":
+            show_deployment_page()
         elif page == "Logout":
             st.session_state.user = None
             st.rerun()
@@ -1255,6 +1263,35 @@ def show_submit_report():
             if success:
                 st.success(message)
                 
+                # Generate AI Safety Advice
+                with st.spinner("🤖 Generating AI safety advice..."):
+                    try:
+                        from ai_advice import generate_safety_advice, save_advice_to_database
+                        
+                        # Generate advice
+                        advice_data = generate_safety_advice(risk_type, location, description)
+                        
+                        if advice_data["success"]:
+                            # Save advice to database
+                            save_advice_to_database(report_data.get('id', 0), advice_data)
+                            
+                            # Display advice
+                            st.markdown("""
+                            <div class="info-box">
+                                <h4>🤖 AI Safety Advice</h4>
+                                <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
+                                    {}
+                                </div>
+                            </div>
+                            """.format(advice_data["advice"].replace('\n', '<br>')), unsafe_allow_html=True)
+                        else:
+                            st.warning("⚠️ Could not generate AI advice at this time.")
+                            
+                    except ImportError:
+                        st.info("ℹ️ AI advice module not available. Install required dependencies.")
+                    except Exception as e:
+                        st.warning(f"⚠️ Error generating AI advice: {str(e)}")
+                
                 # Show confirmation summary
                 st.markdown("""
                 <div class="success-box">
@@ -1271,6 +1308,21 @@ def show_submit_report():
                 ), unsafe_allow_html=True)
                 
                 st.info("Your report has been submitted and is pending verification.")
+                
+                # Send SMS alert for high-risk reports
+                try:
+                    from deploy_app import SMSFallback
+                    if risk_type.lower() in ['robbery', 'flooding', 'protest']:
+                        SMSFallback.send_high_risk_alert({
+                            'id': report_data.get('id', 0),
+                            'risk_type': risk_type,
+                            'location': location,
+                            'description': description
+                        })
+                except ImportError:
+                    pass  # SMS module not available
+                except Exception:
+                    pass  # SMS alert failed
             else:
                 st.error(message)
 
@@ -2527,6 +2579,42 @@ def show_config_panel():
     
     *These features will be implemented in the next version.*
     """)
+
+def show_ai_advice_page():
+    """Display AI Safety Advice page"""
+    try:
+        from ai_advice import display_advice_interface
+        display_advice_interface()
+    except ImportError:
+        st.error("AI Advice module not available. Please install required dependencies.")
+        st.info("Required: pip install cryptography")
+
+def show_analytics_page():
+    """Display Analytics Dashboard page"""
+    try:
+        from analytics_dashboard import main as analytics_main
+        analytics_main()
+    except ImportError:
+        st.error("Analytics module not available. Please install required dependencies.")
+        st.info("Required: pip install pandas plotly")
+
+def show_security_page():
+    """Display Security Settings page"""
+    try:
+        from security import main as security_main
+        security_main()
+    except ImportError:
+        st.error("Security module not available. Please install required dependencies.")
+        st.info("Required: pip install cryptography")
+
+def show_deployment_page():
+    """Display Deployment & PWA page"""
+    try:
+        from deploy_app import main as deployment_main
+        deployment_main()
+    except ImportError:
+        st.error("Deployment module not available. Please install required dependencies.")
+        st.info("Required: pip install cryptography")
 
 if __name__ == "__main__":
     main() 

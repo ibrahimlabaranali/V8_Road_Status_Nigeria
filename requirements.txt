@@ -1,3 +1,1 @@
-# Ultra Lite Requirements - Streamlit Cloud Compatible
-streamlit==1.28.1
-bcrypt==4.1.2 
+streamlit==1.28.1 

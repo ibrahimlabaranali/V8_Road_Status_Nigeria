@@ -138,7 +138,8 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📊 Go to Admin Dashboard", type="primary"):
-                st.switch_page("admin_dashboard.py")
+                st.session_state.admin_page = "dashboard"
+                st.rerun()
         with col2:
             if st.button("🚪 Logout", type="secondary"):
                 st.session_state.admin_logged_in = False

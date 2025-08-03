@@ -54,7 +54,8 @@ def check_admin_session():
     if not st.session_state.get("admin_logged_in"):
         st.error("🔐 Access denied. Please login as admin.")
         st.info("Redirecting to admin login...")
-        st.switch_page("admin_login.py")
+        st.session_state.admin_page = "login"
+        st.rerun()
         return False
     return True
 
@@ -247,7 +248,8 @@ def main():
         if st.button("🚪 Logout", type="secondary"):
             st.session_state.admin_logged_in = False
             st.session_state.admin_user = None
-            st.switch_page("admin_login.py")
+            st.session_state.admin_page = "login"
+            st.rerun()
     
     # Community Statistics
     st.subheader("📊 Community Statistics")
@@ -401,15 +403,18 @@ def main():
     
     with col1:
         if st.button("📊 Admin Dashboard", type="secondary"):
-            st.switch_page("admin_dashboard.py")
+            st.session_state.admin_page = "dashboard"
+            st.rerun()
     
     with col2:
         if st.button("⚙️ Config Panel", type="secondary"):
-            st.switch_page("admin_config_panel.py")
+            st.session_state.admin_page = "config"
+            st.rerun()
     
     with col3:
         if st.button("📊 View Logs", type="secondary"):
-            st.switch_page("admin_logs.py")
+            st.session_state.admin_page = "logs"
+            st.rerun()
 
 if __name__ == "__main__":
     main() 

@@ -1,3 +1,0 @@
-# Nigerian Road Risk Reporter - Minimal Requirements (Streamlit Cloud Compatible)
-# Core dependency only - all other features will work with fallbacks
-streamlit==1.28.1 

@@ -1,10 +1,10 @@
 # Nigerian Road Risk Reporter - Enhanced Requirements (Python 3.13 Compatible)
 # Core dependencies
-streamlit==1.28.1
+streamlit>=1.28.0
 pandas>=2.1.0
 plotly>=5.17.0
 
-# Security and encryption
+# Security and encryption (optional - has fallback)
 cryptography>=41.0.0
 
 # Data processing (Python 3.13 compatible versions)

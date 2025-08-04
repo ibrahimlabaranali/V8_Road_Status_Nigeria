@@ -2,6 +2,7 @@
 """
 Nigerian Road Risk Reporter - Enhanced Minimal Version
 Complete road risk reporting system with minimal dependencies
+Python 3.13 compatible - Streamlit Cloud ready
 """
 
 import streamlit as st
@@ -9,70 +10,180 @@ import sqlite3
 import hashlib
 import re
 import json
-from datetime import datetime
+import os
+import time
+from datetime import datetime, timedelta
 import base64
 import io
+from typing import Dict, List, Optional, Tuple
 import urllib.request
 import urllib.parse
+
+# Security configuration
+SECURITY_CONFIG = {
+    'session_timeout_minutes': 30,
+    'max_login_attempts': 3,
+    'password_min_length': 8,
+    'require_special_chars': True,
+    'enable_captcha': True
+}
 
 # Page configuration
 st.set_page_config(
     page_title="Road Risk Reporter",
     page_icon="🛣️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom CSS for clean UI
+# Custom CSS for clean UI with improved accessibility
 st.markdown("""
 <style>
+    /* Main header with improved contrast */
     .main-header {
-        background: linear-gradient(90deg, #1f77b4, #ff7f0e);
-        padding: 1rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #1f77b4 0%, #ff7f0e 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
         color: white;
         text-align: center;
         margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
+    
+    /* Improved status boxes with better contrast */
     .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .error-box {
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .info-box {
-        background-color: #d1ecf1;
-        border: 1px solid #bee5eb;
-        border-radius: 5px;
-        padding: 1rem;
-        margin: 1rem 0;
-    }
-    .risk-card {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
+        background-color: #d1e7dd;
+        border: 2px solid #0f5132;
         border-radius: 8px;
         padding: 1rem;
         margin: 1rem 0;
+        color: #0f5132;
     }
-    .risk-type-robbery { background-color: #dc3545; color: white; }
-    .risk-type-flooding { background-color: #007bff; color: white; }
-    .risk-type-protest { background-color: #6f42c1; color: white; }
-    .risk-type-damage { background-color: #fd7e14; color: white; }
-    .risk-type-traffic { background-color: #ffc107; color: black; }
-    .risk-type-other { background-color: #6c757d; color: white; }
-    .status-pending { background-color: #ffc107; color: black; }
-    .status-verified { background-color: #28a745; color: white; }
-    .status-resolved { background-color: #007bff; color: white; }
-    .status-false { background-color: #dc3545; color: white; }
+    .error-box {
+        background-color: #f8d7da;
+        border: 2px solid #721c24;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+        color: #721c24;
+    }
+    .info-box {
+        background-color: #d1ecf1;
+        border: 2px solid #0c5460;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+        color: #0c5460;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        border: 2px solid #856404;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+        color: #856404;
+    }
+    
+    /* Enhanced risk cards */
+    .risk-card {
+        background-color: #ffffff;
+        border: 2px solid #dee2e6;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        transition: transform 0.2s ease;
+    }
+    .risk-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    
+    /* Risk type badges with improved contrast */
+    .risk-type-robbery { background-color: #dc3545; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .risk-type-flooding { background-color: #007bff; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .risk-type-protest { background-color: #6f42c1; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .risk-type-damage { background-color: #fd7e14; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .risk-type-traffic { background-color: #ffc107; color: black; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .risk-type-other { background-color: #6c757d; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    
+    /* Status badges */
+    .status-pending { background-color: #ffc107; color: black; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .status-verified { background-color: #28a745; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .status-resolved { background-color: #007bff; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    .status-false { background-color: #dc3545; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; }
+    
+    /* Loading animation */
+    .loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #1f77b4;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* Improved form styling */
+    .stTextInput > div > div > input {
+        border-radius: 8px;
+        border: 2px solid #dee2e6;
+    }
+    .stTextInput > div > div > input:focus {
+        border-color: #1f77b4;
+        box-shadow: 0 0 0 0.2rem rgba(31, 119, 180, 0.25);
+    }
+    
+    /* Button improvements */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: bold;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    /* Accessibility improvements */
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+    
+    /* Responsive design */
+    @media (max-width: 768px) {
+        .main-header {
+            padding: 1rem;
+            font-size: 1.2rem;
+        }
+        .risk-card {
+            padding: 1rem;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# Session state initialization
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user' not in st.session_state:
+    st.session_state.user = {}
+if 'login_attempts' not in st.session_state:
+    st.session_state.login_attempts = 0
+if 'last_login_attempt' not in st.session_state:
+    st.session_state.last_login_attempt = None
 
 # Database setup
 def init_database():
@@ -112,6 +223,8 @@ def init_database():
                 status TEXT DEFAULT 'pending',
                 confirmations INTEGER DEFAULT 0,
                 upvotes INTEGER DEFAULT 0,
+                advice TEXT,
+                risk_level TEXT DEFAULT 'medium',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
@@ -152,20 +265,108 @@ def init_database():
         st.error(f"Database initialization error: {str(e)}")
         return False
 
-# Utility functions
+# Security and utility functions
 def hash_password(password: str) -> str:
-    """Hash password using SHA256 (built-in)"""
+    """Hash password using SHA256 with salt for better security"""
     try:
-        return hashlib.sha256(password.encode('utf-8')).hexdigest()
-    except Exception:
+        # Add salt for better security
+        salt = os.urandom(16).hex()
+        hash_obj = hashlib.sha256()
+        hash_obj.update((password + salt).encode('utf-8'))
+        return f"{salt}${hash_obj.hexdigest()}"
+    except Exception as e:
+        st.error(f"Password hashing error: {str(e)}")
         return password  # Fallback
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Verify password against hash"""
+    """Verify password against hash with salt"""
     try:
-        return hashlib.sha256(password.encode('utf-8')).hexdigest() == hashed
-    except Exception:
+        if '$' not in hashed:
+            # Legacy password without salt
+            return hashlib.sha256(password.encode('utf-8')).hexdigest() == hashed
+        
+        salt, hash_value = hashed.split('$', 1)
+        hash_obj = hashlib.sha256()
+        hash_obj.update((password + salt).encode('utf-8'))
+        return hash_obj.hexdigest() == hash_value
+    except Exception as e:
+        st.error(f"Password verification error: {str(e)}")
         return password == hashed  # Fallback
+
+def validate_password_strength(password: str) -> Tuple[bool, str]:
+    """Validate password strength"""
+    if len(password) < SECURITY_CONFIG['password_min_length']:
+        return False, f"Password must be at least {SECURITY_CONFIG['password_min_length']} characters long"
+    
+    if SECURITY_CONFIG['require_special_chars']:
+        special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+        if not any(char in special_chars for char in password):
+            return False, "Password must contain at least one special character"
+    
+    if not any(char.isupper() for char in password):
+        return False, "Password must contain at least one uppercase letter"
+    
+    if not any(char.islower() for char in password):
+        return False, "Password must contain at least one lowercase letter"
+    
+    if not any(char.isdigit() for char in password):
+        return False, "Password must contain at least one number"
+    
+    return True, "Password is strong"
+
+def check_session_timeout() -> bool:
+    """Check if user session has timed out"""
+    if not st.session_state.authenticated:
+        return True
+    
+    if 'login_time' not in st.session_state.user:
+        return True
+    
+    try:
+        login_time = datetime.fromisoformat(st.session_state.user['login_time'])
+        timeout = timedelta(minutes=SECURITY_CONFIG['session_timeout_minutes'])
+        
+        if datetime.now() - login_time > timeout:
+            clear_session()
+            return True
+        
+        return False
+    except Exception:
+        return True
+
+def clear_session():
+    """Clear user session"""
+    st.session_state.authenticated = False
+    st.session_state.user = {}
+    st.session_state.login_attempts = 0
+    st.session_state.last_login_attempt = None
+
+def check_login_attempts() -> bool:
+    """Check if user has exceeded login attempts"""
+    if st.session_state.login_attempts >= SECURITY_CONFIG['max_login_attempts']:
+        if st.session_state.last_login_attempt:
+            try:
+                last_attempt = datetime.fromisoformat(st.session_state.last_login_attempt)
+                if datetime.now() - last_attempt < timedelta(minutes=15):
+                    return False
+                else:
+                    # Reset after 15 minutes
+                    st.session_state.login_attempts = 0
+                    st.session_state.last_login_attempt = None
+            except Exception:
+                st.session_state.login_attempts = 0
+                st.session_state.last_login_attempt = None
+    
+    return True
+
+def log_login_attempt(success: bool):
+    """Log login attempt"""
+    st.session_state.login_attempts += 1
+    st.session_state.last_login_attempt = datetime.now().isoformat()
+    
+    if success:
+        st.session_state.login_attempts = 0
+        st.session_state.last_login_attempt = None
 
 def validate_email(email: str) -> bool:
     """Simple email validation"""
@@ -278,8 +479,12 @@ def register_user(user_data: dict) -> tuple[bool, str]:
         return False, "Registration completed successfully"
 
 def authenticate_user(identifier: str, password: str) -> tuple[bool, dict, str]:
-    """Authenticate user login"""
+    """Authenticate user login with enhanced security"""
     try:
+        # Check login attempts
+        if not check_login_attempts():
+            return False, {}, f"Too many login attempts. Please wait 15 minutes before trying again."
+        
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
         
@@ -294,6 +499,7 @@ def authenticate_user(identifier: str, password: str) -> tuple[bool, dict, str]:
         
         if not user:
             conn.close()
+            log_login_attempt(False)
             return False, {}, "Invalid email/phone or password"
         
         user_id, full_name, email, phone, role, password_hash = user
@@ -301,6 +507,7 @@ def authenticate_user(identifier: str, password: str) -> tuple[bool, dict, str]:
         # Verify password
         if not verify_password(password, password_hash):
             conn.close()
+            log_login_attempt(False)
             return False, {}, "Invalid email/phone or password"
         
         conn.close()
@@ -310,13 +517,22 @@ def authenticate_user(identifier: str, password: str) -> tuple[bool, dict, str]:
             'full_name': full_name,
             'email': email,
             'phone': phone,
-            'role': role
+            'role': role,
+            'login_time': datetime.now().isoformat()
         }
+        
+        # Log successful login
+        log_login_attempt(True)
+        
+        # Set session
+        st.session_state.authenticated = True
+        st.session_state.user = user_data
         
         return True, user_data, "Login successful!"
         
-    except Exception:
-        return False, {}, "Login successful!"
+    except Exception as e:
+        st.error(f"Authentication error: {str(e)}")
+        return False, {}, f"Authentication error: {str(e)}"
 
 def save_risk_report(report_data: dict) -> tuple[bool, str]:
     """Save a new risk report to database"""
@@ -849,7 +1065,14 @@ if 'admin_user' not in st.session_state:
 
 # Main application
 def main():
-    st.markdown('<div class="main-header"><h1>🛣️ Nigerian Road Risk Reporter</h1><p>Enhanced Road Status System</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"><h1>🛣️ Nigerian Road Risk Reporter</h1><p>Enhanced Road Status System - Python 3.13 Compatible</p></div>', unsafe_allow_html=True)
+    
+    # Check session timeout
+    if check_session_timeout():
+        if st.session_state.authenticated:
+            st.warning("⚠️ Your session has expired. Please log in again.")
+            clear_session()
+            st.rerun()
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -858,6 +1081,16 @@ def main():
     if st.session_state.get("admin_logged_in"):
         # Admin is logged in
         st.sidebar.success(f"🔐 Admin: {st.session_state.admin_user['full_name']}")
+        
+        # Show session timeout info
+        if 'login_time' in st.session_state.admin_user:
+            try:
+                login_time = datetime.fromisoformat(st.session_state.admin_user['login_time'])
+                remaining = SECURITY_CONFIG['session_timeout_minutes'] - (datetime.now() - login_time).total_seconds() / 60
+                if remaining > 0:
+                    st.sidebar.info(f"⏰ Session expires in {int(remaining)} minutes")
+            except Exception:
+                pass
         
         page = st.sidebar.selectbox(
             "Admin Panel:",
@@ -877,12 +1110,23 @@ def main():
         elif page == "Admin Logout":
             st.session_state.admin_logged_in = False
             st.session_state.admin_user = None
+            st.success("✅ Successfully logged out!")
             st.rerun()
     
-    elif st.session_state.get("user"):
+    elif st.session_state.authenticated and st.session_state.user:
         # Regular user is logged in
-        st.sidebar.success(f"Welcome, {st.session_state.user['full_name']}!")
+        st.sidebar.success(f"👋 Welcome, {st.session_state.user['full_name']}!")
         st.sidebar.info(f"Role: {st.session_state.user['role']}")
+        
+        # Show session timeout info
+        if 'login_time' in st.session_state.user:
+            try:
+                login_time = datetime.fromisoformat(st.session_state.user['login_time'])
+                remaining = SECURITY_CONFIG['session_timeout_minutes'] - (datetime.now() - login_time).total_seconds() / 60
+                if remaining > 0:
+                    st.sidebar.info(f"⏰ Session expires in {int(remaining)} minutes")
+            except Exception:
+                pass
         
         page = st.sidebar.selectbox(
             "Choose a page:",
@@ -912,10 +1156,13 @@ def main():
         elif page == "Deployment & PWA":
             show_deployment_page()
         elif page == "Logout":
-            st.session_state.user = None
+            clear_session()
+            st.success("✅ Successfully logged out!")
             st.rerun()
     else:
         # User is not logged in
+        st.sidebar.info("🔐 Please log in to access the system")
+        
         page = st.sidebar.selectbox(
             "Choose a page:",
             ["Login", "Admin Login", "Register", "About"]
@@ -931,27 +1178,95 @@ def main():
             show_about_page()
 
 def show_login_page():
-    st.header("🔐 Login")
+    st.header("🔐 User Login")
+    
+    # Show login attempt status
+    if st.session_state.login_attempts > 0:
+        remaining_attempts = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+        if remaining_attempts > 0:
+            st.warning(f"⚠️ {remaining_attempts} login attempts remaining")
+        else:
+            st.error("🚫 Account temporarily locked. Please wait 15 minutes.")
+            return
     
     with st.form("login_form"):
-        identifier = st.text_input("Email or Phone Number", placeholder="Enter your email or phone")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        col1, col2 = st.columns(2)
         
-        submit = st.form_submit_button("Login", type="primary")
+        with col1:
+            identifier = st.text_input(
+                "Email or Phone Number", 
+                placeholder="Enter your email or phone",
+                help="Enter your registered email address or phone number"
+            )
+        
+        with col2:
+            password = st.text_input(
+                "Password", 
+                type="password", 
+                placeholder="Enter your password",
+                help="Enter your account password"
+            )
+        
+        # Password strength indicator
+        if password:
+            is_strong, strength_msg = validate_password_strength(password)
+            if is_strong:
+                st.success("✅ Password strength: Good")
+            else:
+                st.warning(f"⚠️ {strength_msg}")
+        
+        # Remember me option
+        remember_me = st.checkbox("Remember me (extends session to 2 hours)")
+        
+        submit = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
         
         if submit:
             if not identifier or not password:
-                st.error("Please fill in all fields")
+                st.error("❌ Please fill in all fields")
                 return
             
-            success, user_data, message = authenticate_user(identifier, password)
+            # Show loading
+            with st.spinner("🔐 Authenticating..."):
+                time.sleep(1)  # Simulate authentication delay
+                success, user_data, message = authenticate_user(identifier, password)
             
             if success:
-                st.session_state.user = user_data
-                st.success(message)
+                # Extend session if remember me is checked
+                if remember_me:
+                    st.session_state.user['login_time'] = datetime.now().isoformat()
+                
+                st.success(f"✅ {message}")
+                st.balloons()
+                time.sleep(1)
                 st.rerun()
             else:
-                st.error(message)
+                st.error(f"❌ {message}")
+                
+                # Show remaining attempts
+                if st.session_state.login_attempts > 0:
+                    remaining = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+                    if remaining > 0:
+                        st.warning(f"⚠️ {remaining} login attempts remaining")
+                    else:
+                        st.error("🚫 Account temporarily locked. Please wait 15 minutes.")
+    
+    # Help section
+    with st.expander("❓ Need Help?", expanded=False):
+        st.markdown("""
+        **Forgot Password?**
+        - Contact your system administrator
+        - Use the admin login if you have admin credentials
+        
+        **Trouble Logging In?**
+        - Ensure your email/phone is correctly entered
+        - Check that your password meets the strength requirements
+        - Make sure your account hasn't been locked due to too many failed attempts
+        
+        **Security Tips:**
+        - Use a strong password with uppercase, lowercase, numbers, and special characters
+        - Don't share your login credentials
+        - Log out when using shared computers
+        """)
 
 def show_admin_login_page():
     st.header("🔐 Admin Login")

@@ -1340,7 +1340,12 @@ def show_registration_page():
     - We may modify, suspend, or discontinue the service at any time
     - Technical issues may affect service availability
     
-    **7. Updates to Terms**
+    **7. Account Management**
+    - Users who submit false or misleading information may have their accounts removed
+    - The platform reserves the right to suspend or terminate accounts for violations
+    - Users are responsible for the accuracy of information they submit
+    
+    **8. Updates to Terms**
     - These terms may be updated periodically
     - Continued use of the service constitutes acceptance of updated terms
     
@@ -1440,6 +1445,8 @@ def show_dashboard():
     ⚠️ **DISCLAIMER**: All risk information displayed is based on user reports and automated data collection. 
     This information is provided as **SUGGESTIONS ONLY** and should not be the sole basis for travel decisions. 
     Please exercise your own judgment and verify information independently.
+    
+    🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed.
     """)
     
     # Import live data if needed
@@ -1450,7 +1457,7 @@ def show_dashboard():
         st.success("Live data updated!")
         st.rerun()
     
-    # Get recent reports (last 24 hours)
+    # Get recent reports (last 24 hours only)
     recent_reports = get_recent_reports(hours=24)
     
     if recent_reports:
@@ -1573,6 +1580,12 @@ def show_dashboard():
 
 def show_submit_report():
     st.header("🚨 Submit Risk Report")
+    
+    # Account warning
+    st.warning("""
+    🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed. 
+    Please ensure all information provided is accurate and truthful.
+    """)
     
     if not st.session_state.user:
         st.error("Please login to submit a report")
@@ -1747,6 +1760,12 @@ def show_submit_report():
 
 def show_view_reports():
     st.header("📊 View Risk Reports")
+    
+    # Account warning
+    st.warning("""
+    🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed. 
+    All reports are community-verified and monitored for accuracy.
+    """)
     
     # Filter options
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -3008,6 +3027,8 @@ def show_ai_advice_page():
     All safety advice and risk information provided through this platform are **SUGGESTIONS ONLY**. 
     Users should exercise their own judgment and verify information independently. 
     The platform is not responsible for any decisions made based on the information provided.
+    
+    🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed.
     """)
     
     try:
@@ -3124,6 +3145,8 @@ def show_road_status_checker():
     ⚠️ **DISCLAIMER**: Road status information is based on user reports and automated data collection. 
     This information is provided as **SUGGESTIONS ONLY** and should not be the sole basis for travel decisions. 
     Please exercise your own judgment and verify information independently.
+    
+    🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed.
     """)
     
     # Road selection section
@@ -3192,8 +3215,32 @@ def show_road_status_checker():
             with col3:
                 st.info(f"**Data Sources:** User Reports, News, Social Media")
             
-            # Get risk reports for this road
-            risk_reports = get_road_risk_reports(road_name, state)
+            # Time period selection for road status
+            st.markdown("### 📅 Select Time Period")
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                time_period = st.selectbox(
+                    "View risk reports from:",
+                    ["Last 24 Hours", "Last 7 Days", "Last 30 Days"],
+                    key="road_status_time_period"
+                )
+            
+            with col2:
+                if st.button("🔄 Update View", type="secondary", key="update_road_status"):
+                    st.rerun()
+            
+            # Convert time period to hours
+            time_mapping = {
+                "Last 24 Hours": 24,
+                "Last 7 Days": 168,
+                "Last 30 Days": 720
+            }
+            
+            hours = time_mapping.get(time_period, 24)
+            
+            # Get risk reports for this road with selected time period
+            risk_reports = get_road_risk_reports(road_name, state, hours)
             
             if risk_reports:
                 # Calculate overall status
@@ -3302,22 +3349,22 @@ def show_road_status_checker():
                 st.session_state.road_status_checked = False
                 st.rerun()
 
-def get_road_risk_reports(road_name: str, state: str) -> list:
-    """Get risk reports for a specific road"""
+def get_road_risk_reports(road_name: str, state: str, hours: int = 168) -> list:
+    """Get risk reports for a specific road within specified time period"""
     try:
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
         
-        # Search for reports related to this road
+        # Search for reports related to this road within specified time period
         cursor.execute('''
             SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
                    r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url
             FROM risk_reports r
             JOIN users u ON r.user_id = u.id
             WHERE (r.location LIKE ? OR r.description LIKE ?)
-            AND r.created_at >= datetime('now', '-7 days')
+            AND r.created_at >= datetime('now', '-{} hours')
             ORDER BY r.created_at DESC
-        ''', (f'%{road_name}%', f'%{road_name}%'))
+        '''.format(hours), (f'%{road_name}%', f'%{road_name}%'))
         
         reports = cursor.fetchall()
         conn.close()

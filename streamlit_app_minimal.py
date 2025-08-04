@@ -1130,10 +1130,19 @@ def main():
             except Exception:
                 pass
         
+        # Initialize current page if not set
+        if 'current_page' not in st.session_state:
+            st.session_state.current_page = "Dashboard"
+        
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"]
+            ["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
+            index=["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
         )
+        
+        # Update session state if page changed
+        if page != st.session_state.current_page:
+            st.session_state.current_page = page
         
         if page == "Dashboard":
             show_dashboard()
@@ -1546,19 +1555,23 @@ def show_dashboard():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("📝 Submit New Report", type="primary"):
+        if st.button("📝 Submit New Report", type="primary", key="quick_submit_report"):
+            st.session_state.current_page = "Submit Report"
             st.rerun()
     
     with col2:
-        if st.button("🛣️ Check Road Status", type="secondary"):
+        if st.button("🛣️ Check Road Status", type="secondary", key="quick_road_status"):
+            st.session_state.current_page = "Road Status Checker"
             st.rerun()
     
     with col3:
-        if st.button("📊 View All Reports"):
+        if st.button("📊 View All Reports", key="quick_view_reports"):
+            st.session_state.current_page = "View Reports"
             st.rerun()
     
     with col4:
-        if st.button("📰 Live Feeds"):
+        if st.button("📰 Live Feeds", key="quick_live_feeds"):
+            st.session_state.current_page = "Live Feeds"
             st.rerun()
     
     # Admin actions (if admin)
@@ -1567,15 +1580,18 @@ def show_dashboard():
         col5, col6, col7 = st.columns(3)
         
         with col5:
-            if st.button("🛠️ Manage Reports"):
+            if st.button("🛠️ Manage Reports", key="quick_manage_reports"):
+                st.session_state.current_page = "Manage Reports"
                 st.rerun()
         
         with col6:
-            if st.button("👥 User Management"):
+            if st.button("👥 User Management", key="quick_user_management"):
+                st.session_state.current_page = "User Management"
                 st.rerun()
         
         with col7:
-            if st.button("📊 Analytics Dashboard"):
+            if st.button("📊 Analytics Dashboard", key="quick_analytics"):
+                st.session_state.current_page = "Analytics Dashboard"
                 st.rerun()
 
 def show_submit_report():
@@ -3157,13 +3173,25 @@ def show_road_status_checker():
         "Lagos-Ibadan Expressway": {"state": "Lagos/Ogun", "coordinates": (6.5244, 3.3792)},
         "Third Mainland Bridge": {"state": "Lagos", "coordinates": (6.5244, 3.3792)},
         "Lekki-Epe Expressway": {"state": "Lagos", "coordinates": (6.5244, 3.3792)},
+        "Victoria Island Road": {"state": "Lagos", "coordinates": (6.4281, 3.4219)},
+        "Ikorodu Road": {"state": "Lagos", "coordinates": (6.6018, 3.3515)},
         "Ahmadu Bello Way": {"state": "Abuja FCT", "coordinates": (9.0820, 8.6753)},
         "Kubwa Expressway": {"state": "Abuja FCT", "coordinates": (9.0820, 8.6753)},
+        "Airport Road": {"state": "Abuja FCT", "coordinates": (9.0820, 8.6753)},
         "Port Harcourt-Aba Road": {"state": "Rivers/Abia", "coordinates": (4.8156, 7.0498)},
+        "East-West Road": {"state": "Rivers/Bayelsa", "coordinates": (4.8156, 7.0498)},
         "Kano-Kaduna Expressway": {"state": "Kano/Kaduna", "coordinates": (11.9914, 8.5311)},
+        "Kano-Maiduguri Road": {"state": "Kano/Borno", "coordinates": (11.9914, 8.5311)},
         "Enugu-Onitsha Expressway": {"state": "Enugu/Anambra", "coordinates": (6.4584, 7.5464)},
+        "Enugu-Port Harcourt Road": {"state": "Enugu/Rivers", "coordinates": (6.4584, 7.5464)},
         "Calabar-Uyo Road": {"state": "Cross River/Akwa Ibom", "coordinates": (4.9757, 8.3417)},
+        "Calabar-Port Harcourt Road": {"state": "Cross River/Rivers", "coordinates": (4.9757, 8.3417)},
         "Maiduguri-Damaturu Road": {"state": "Borno/Yobe", "coordinates": (11.8333, 13.1500)},
+        "Jos-Kaduna Road": {"state": "Plateau/Kaduna", "coordinates": (9.8965, 8.8583)},
+        "Ibadan-Ilorin Road": {"state": "Oyo/Kwara", "coordinates": (7.3961, 3.8969)},
+        "Benin-Ore Road": {"state": "Edo/Ondo", "coordinates": (6.3176, 5.6145)},
+        "Benin-Warri Road": {"state": "Edo/Delta", "coordinates": (6.3176, 5.6145)},
+        "Warri-Port Harcourt Road": {"state": "Delta/Rivers", "coordinates": (5.5560, 5.8819)},
         "Other/Custom": {"state": "Custom", "coordinates": (None, None)}
     }
     
@@ -3191,7 +3219,7 @@ def show_road_status_checker():
             if custom_road and custom_state:
                 st.session_state.road_status_checked = True
                 st.session_state.selected_road = custom_road
-                st.session_state.custom_road_state = custom_state
+                st.session_state.custom_road_state_value = custom_state
             else:
                 st.error("Please enter both road name and state.")
     
@@ -3204,7 +3232,7 @@ def show_road_status_checker():
             
             # Get road information
             road_info = major_roads.get(road_name, {})
-            state = road_info.get('state', st.session_state.get('custom_road_state', 'Unknown'))
+            state = road_info.get('state', st.session_state.get('custom_road_state_value', 'Unknown'))
             
             # Display road info
             col1, col2, col3 = st.columns(3)
@@ -3478,6 +3506,34 @@ def get_alternative_routes(road_name: str, state: str) -> list:
         "Lekki-Epe Expressway": [
             {"name": "Victoria Island-Epe Road", "description": "Coastal alternative route", "time": "+25 minutes"},
             {"name": "Ikorodu-Epe Road", "description": "Inland alternative", "time": "+35 minutes"}
+        ],
+        "Victoria Island Road": [
+            {"name": "Ikoyi-Lekki Road", "description": "Alternative through Ikoyi", "time": "+10 minutes"},
+            {"name": "Ahmadu Bello Way", "description": "Main alternative route", "time": "+15 minutes"}
+        ],
+        "Ikorodu Road": [
+            {"name": "Lagos-Ibadan Expressway", "description": "Main expressway alternative", "time": "+20 minutes"},
+            {"name": "Epe-Ikorodu Road", "description": "Coastal alternative", "time": "+25 minutes"}
+        ],
+        "Ahmadu Bello Way": [
+            {"name": "Airport Road", "description": "Alternative through airport area", "time": "+10 minutes"},
+            {"name": "Kubwa Expressway", "description": "Northern alternative", "time": "+15 minutes"}
+        ],
+        "Port Harcourt-Aba Road": [
+            {"name": "East-West Road", "description": "Coastal alternative route", "time": "+20 minutes"},
+            {"name": "Port Harcourt-Enugu Road", "description": "Northern alternative", "time": "+30 minutes"}
+        ],
+        "Kano-Kaduna Expressway": [
+            {"name": "Jos-Kaduna Road", "description": "Alternative through Jos", "time": "+45 minutes"},
+            {"name": "Kano-Maiduguri Road", "description": "Eastern alternative", "time": "+60 minutes"}
+        ],
+        "Enugu-Onitsha Expressway": [
+            {"name": "Enugu-Port Harcourt Road", "description": "Southern alternative", "time": "+30 minutes"},
+            {"name": "Enugu-Awka Road", "description": "Local alternative", "time": "+15 minutes"}
+        ],
+        "Calabar-Uyo Road": [
+            {"name": "Calabar-Port Harcourt Road", "description": "Western alternative", "time": "+25 minutes"},
+            {"name": "Calabar-Abak Road", "description": "Local alternative", "time": "+10 minutes"}
         ]
     }
     

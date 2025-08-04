@@ -342,28 +342,32 @@ def display_filters() -> Dict:
         date_from = st.date_input(
             "From Date",
             value=datetime.now().date() - timedelta(days=30),
-            max_value=datetime.now().date()
+            max_value=datetime.now().date(),
+            key="analytics_date_from"
         )
         
         risk_type = st.selectbox(
             "Risk Type",
-            ["All", "Robbery", "Flooding", "Protest", "Road Damage", "Traffic", "Other"]
+            ["All", "Robbery", "Flooding", "Protest", "Road Damage", "Traffic", "Other"],
+            key="analytics_risk_type"
         )
     
     with col2:
         date_to = st.date_input(
             "To Date",
             value=datetime.now().date(),
-            max_value=datetime.now().date()
+            max_value=datetime.now().date(),
+            key="analytics_date_to"
         )
         
         status = st.selectbox(
             "Status",
-            ["All", "pending", "verified", "resolved", "false"]
+            ["All", "pending", "verified", "resolved", "false"],
+            key="analytics_status"
         )
     
     with col3:
-        location = st.text_input("Location (contains)", placeholder="e.g., Lagos")
+        location = st.text_input("Location (contains)", placeholder="e.g., Lagos", key="analytics_location")
     
     return {
         'date_from': date_from.strftime('%Y-%m-%d') if date_from else None,
@@ -432,19 +436,19 @@ def display_charts(df: pd.DataFrame):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.plotly_chart(create_risk_type_chart(df), use_container_width=True)
+        st.plotly_chart(create_risk_type_chart(df), use_container_width=True, key="risk_type_chart")
     
     with col2:
-        st.plotly_chart(create_status_pie_chart(df), use_container_width=True)
+        st.plotly_chart(create_status_pie_chart(df), use_container_width=True, key="status_pie_chart")
     
     # Time series and hourly distribution
     col3, col4 = st.columns(2)
     
     with col3:
-        st.plotly_chart(create_time_series_chart(df), use_container_width=True)
+        st.plotly_chart(create_time_series_chart(df), use_container_width=True, key="time_series_chart")
     
     with col4:
-        st.plotly_chart(create_hourly_distribution_chart(df), use_container_width=True)
+        st.plotly_chart(create_hourly_distribution_chart(df), use_container_width=True, key="hourly_distribution_chart")
 
 def display_export_section(df: pd.DataFrame):
     """Display export functionality"""
@@ -458,7 +462,8 @@ def display_export_section(df: pd.DataFrame):
                 label="📊 Download CSV",
                 data=csv_data,
                 file_name=f"road_risk_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                key="analytics_download_csv"
             )
             
             st.info(f"📊 Data ready for export: {len(df)} records")
@@ -469,12 +474,44 @@ def display_export_section(df: pd.DataFrame):
 
 def main():
     """Main function for analytics dashboard"""
-    st.set_page_config(
-        page_title="Analytics Dashboard",
-        page_icon="📊",
-        layout="wide"
-    )
+    # Don't set page config when called from another app
+    # st.set_page_config(
+    #     page_title="Analytics Dashboard",
+    #     page_icon="📊",
+    #     layout="wide"
+    # )
     
+    st.title("📊 Analytics Dashboard")
+    st.markdown("Comprehensive analytics and insights for road risk reports")
+    
+    # Apply custom CSS
+    st.markdown(ANALYTICS_CSS, unsafe_allow_html=True)
+    
+    # Display filters
+    filters = display_filters()
+    
+    # Load data
+    df = get_reports_data(filters)
+    
+    # Display summary metrics
+    summary = get_analytics_summary(df)
+    display_summary_metrics(summary)
+    
+    # Display charts
+    display_charts(df)
+    
+    # Display export section
+    display_export_section(df)
+    
+    # Show raw data
+    with st.expander("📋 Raw Data", expanded=False):
+        if not df.empty:
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No data available")
+
+def run_analytics_dashboard():
+    """Function to run analytics dashboard without page config (for use in main app)"""
     st.title("📊 Analytics Dashboard")
     st.markdown("Comprehensive analytics and insights for road risk reports")
     

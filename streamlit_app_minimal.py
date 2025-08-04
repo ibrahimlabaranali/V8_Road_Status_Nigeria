@@ -1132,11 +1132,13 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"]
+            ["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"]
         )
         
         if page == "Dashboard":
             show_dashboard()
+        elif page == "Road Status Checker":
+            show_road_status_checker()
         elif page == "Submit Report":
             show_submit_report()
         elif page == "View Reports":
@@ -1541,16 +1543,32 @@ def show_dashboard():
             st.rerun()
     
     with col2:
-        if st.button("📊 View All Reports"):
+        if st.button("🛣️ Check Road Status", type="secondary"):
             st.rerun()
     
     with col3:
-        if st.button("📰 Live Feeds"):
+        if st.button("📊 View All Reports"):
             st.rerun()
     
     with col4:
-        if user['role'] == 'Admin':
+        if st.button("📰 Live Feeds"):
+            st.rerun()
+    
+    # Admin actions (if admin)
+    if user['role'] == 'Admin':
+        st.subheader("Admin Actions")
+        col5, col6, col7 = st.columns(3)
+        
+        with col5:
             if st.button("🛠️ Manage Reports"):
+                st.rerun()
+        
+        with col6:
+            if st.button("👥 User Management"):
+                st.rerun()
+        
+        with col7:
+            if st.button("📊 Analytics Dashboard"):
                 st.rerun()
 
 def show_submit_report():
@@ -3017,8 +3035,8 @@ def show_ai_advice_page():
 def show_analytics_page():
     """Display Analytics Dashboard page"""
     try:
-        from analytics_dashboard import main as analytics_main
-        analytics_main()
+        from analytics_dashboard import run_analytics_dashboard
+        run_analytics_dashboard()
     except ImportError:
         st.warning("📊 Analytics module not available in minimal mode.")
         st.info("ℹ️ Basic report statistics are available in the Dashboard.")
@@ -3096,6 +3114,327 @@ def show_deployment_page():
         - Data encryption and security
         - PWA features and SMS alerts
         """)
+
+def show_road_status_checker():
+    """Display Road Status Checker page for travelers"""
+    st.header("🛣️ Road Status Checker")
+    
+    # Disclaimer
+    st.warning("""
+    ⚠️ **DISCLAIMER**: Road status information is based on user reports and automated data collection. 
+    This information is provided as **SUGGESTIONS ONLY** and should not be the sole basis for travel decisions. 
+    Please exercise your own judgment and verify information independently.
+    """)
+    
+    # Road selection section
+    st.subheader("📍 Select Road to Check")
+    
+    # Predefined major Nigerian roads
+    major_roads = {
+        "Lagos-Ibadan Expressway": {"state": "Lagos/Ogun", "coordinates": (6.5244, 3.3792)},
+        "Third Mainland Bridge": {"state": "Lagos", "coordinates": (6.5244, 3.3792)},
+        "Lekki-Epe Expressway": {"state": "Lagos", "coordinates": (6.5244, 3.3792)},
+        "Ahmadu Bello Way": {"state": "Abuja FCT", "coordinates": (9.0820, 8.6753)},
+        "Kubwa Expressway": {"state": "Abuja FCT", "coordinates": (9.0820, 8.6753)},
+        "Port Harcourt-Aba Road": {"state": "Rivers/Abia", "coordinates": (4.8156, 7.0498)},
+        "Kano-Kaduna Expressway": {"state": "Kano/Kaduna", "coordinates": (11.9914, 8.5311)},
+        "Enugu-Onitsha Expressway": {"state": "Enugu/Anambra", "coordinates": (6.4584, 7.5464)},
+        "Calabar-Uyo Road": {"state": "Cross River/Akwa Ibom", "coordinates": (4.9757, 8.3417)},
+        "Maiduguri-Damaturu Road": {"state": "Borno/Yobe", "coordinates": (11.8333, 13.1500)},
+        "Other/Custom": {"state": "Custom", "coordinates": (None, None)}
+    }
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        selected_road = st.selectbox(
+            "Choose a major road:",
+            list(major_roads.keys()),
+            key="road_selector"
+        )
+    
+    with col2:
+        if st.button("🔍 Check Road Status", type="primary", key="check_road_status"):
+            st.session_state.road_status_checked = True
+            st.session_state.selected_road = selected_road
+    
+    # Custom road input
+    if selected_road == "Other/Custom":
+        st.subheader("📍 Enter Custom Road Details")
+        custom_road = st.text_input("Road Name:", placeholder="e.g., Victoria Island Road", key="custom_road_name")
+        custom_state = st.text_input("State:", placeholder="e.g., Lagos", key="custom_road_state")
+        
+        if st.button("🔍 Check Custom Road", type="primary", key="check_custom_road"):
+            if custom_road and custom_state:
+                st.session_state.road_status_checked = True
+                st.session_state.selected_road = custom_road
+                st.session_state.custom_road_state = custom_state
+            else:
+                st.error("Please enter both road name and state.")
+    
+    # Display road status if checked
+    if st.session_state.get('road_status_checked', False):
+        road_name = st.session_state.get('selected_road', '')
+        
+        if road_name:
+            st.subheader(f"🛣️ Road Status: {road_name}")
+            
+            # Get road information
+            road_info = major_roads.get(road_name, {})
+            state = road_info.get('state', st.session_state.get('custom_road_state', 'Unknown'))
+            
+            # Display road info
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.info(f"**State:** {state}")
+            with col2:
+                st.info(f"**Last Updated:** {datetime.now().strftime('%B %d, %Y at %I:%M %p')}")
+            with col3:
+                st.info(f"**Data Sources:** User Reports, News, Social Media")
+            
+            # Get risk reports for this road
+            risk_reports = get_road_risk_reports(road_name, state)
+            
+            if risk_reports:
+                # Calculate overall status
+                overall_status = calculate_road_status(risk_reports)
+                
+                # Display overall status
+                st.markdown("### 🚦 Overall Road Status")
+                status_color = {
+                    'Safe': '#28a745',
+                    'Moderate': '#ffc107', 
+                    'High Risk': '#dc3545',
+                    'Unknown': '#6c757d'
+                }
+                
+                st.markdown(f"""
+                <div style="background-color: {status_color.get(overall_status, '#6c757d')}; color: white; padding: 1rem; border-radius: 8px; text-align: center; margin: 1rem 0;">
+                    <h3>🚦 {overall_status}</h3>
+                    <p>Based on {len(risk_reports)} recent reports</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Display recent reports
+                st.markdown("### 📋 Recent Risk Reports")
+                
+                for report in risk_reports[:5]:  # Show last 5 reports
+                    report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+                    
+                    # Create status badge
+                    status_class = f"status-{status.lower()}"
+                    risk_class = f"risk-type-{risk_type.lower().replace(' ', '')}"
+                    
+                    # Source badge
+                    source_icons = {
+                        'user': '👤',
+                        'news': '📰',
+                        'social': '📱'
+                    }
+                    source_colors = {
+                        'user': '#28a745',
+                        'news': '#007bff',
+                        'social': '#6f42c1'
+                    }
+                    
+                    source_icon = source_icons.get(source_type, '📄')
+                    source_color = source_colors.get(source_type, '#6c757d')
+                    
+                    # Time ago calculation
+                    time_ago = get_time_ago(created_at)
+                    
+                    st.markdown(f"""
+                    <div class="risk-card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <span class="{risk_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{risk_type.upper()}</span>
+                                <span style="background-color: {source_color}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{source_icon} {source_type.upper()}</span>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <span class="{status_class}" style="padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">{status.upper()}</span>
+                                <span style="color: #6c757d; font-size: 12px;">{time_ago}</span>
+                            </div>
+                        </div>
+                        <p><strong>Description:</strong> {description}</p>
+                        <p><strong>Location:</strong> 📍 {location}</p>
+                        <p><strong>Reported by:</strong> {reporter_name}</p>
+                        <p><strong>Confirmations:</strong> ✅ {confirmations}</p>
+                        {f'<p><strong>Source:</strong> <a href="{source_url}" target="_blank">🔗 View Original</a></p>' if source_url else ''}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                if len(risk_reports) > 5:
+                    st.info(f"Showing 5 of {len(risk_reports)} recent reports for this road.")
+                
+                # Travel advice based on status
+                st.markdown("### 💡 Travel Advice")
+                travel_advice = get_travel_advice(overall_status, risk_reports)
+                st.markdown(f"""
+                <div style="background-color: #f8f9fa; border-left: 4px solid {status_color.get(overall_status, '#6c757d')}; padding: 1rem; margin: 1rem 0;">
+                    {travel_advice}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Alternative routes (if high risk)
+                if overall_status == 'High Risk':
+                    st.markdown("### 🛣️ Alternative Routes")
+                    alternative_routes = get_alternative_routes(road_name, state)
+                    if alternative_routes:
+                        for route in alternative_routes:
+                            st.info(f"**{route['name']}**: {route['description']} (Estimated time: {route['time']})")
+                    else:
+                        st.info("Consider checking with local authorities for alternative routes.")
+                
+            else:
+                st.success("✅ No recent risk reports found for this road.")
+                st.info("""
+                **Status: Safe (No Reports)**
+                
+                This road appears to be clear of reported risks at the moment. However, please:
+                - Exercise normal caution while traveling
+                - Stay alert to changing conditions
+                - Follow local traffic advisories
+                - Have emergency contacts ready
+                """)
+            
+            # Refresh button
+            if st.button("🔄 Refresh Road Status", type="secondary"):
+                st.session_state.road_status_checked = False
+                st.rerun()
+
+def get_road_risk_reports(road_name: str, state: str) -> list:
+    """Get risk reports for a specific road"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Search for reports related to this road
+        cursor.execute('''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE (r.location LIKE ? OR r.description LIKE ?)
+            AND r.created_at >= datetime('now', '-7 days')
+            ORDER BY r.created_at DESC
+        ''', (f'%{road_name}%', f'%{road_name}%'))
+        
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def calculate_road_status(reports: list) -> str:
+    """Calculate overall road status based on risk reports"""
+    if not reports:
+        return "Unknown"
+    
+    # Count risk types
+    risk_counts = {}
+    for report in reports:
+        risk_type = report[1]  # risk_type
+        risk_counts[risk_type] = risk_counts.get(risk_type, 0) + 1
+    
+    # High risk indicators
+    high_risk_types = ['Robbery', 'Flooding', 'Protest']
+    high_risk_count = sum(risk_counts.get(risk, 0) for risk in high_risk_types)
+    
+    # Moderate risk indicators
+    moderate_risk_types = ['Road Damage', 'Traffic']
+    moderate_risk_count = sum(risk_counts.get(risk, 0) for risk in moderate_risk_types)
+    
+    # Determine status
+    if high_risk_count >= 2:
+        return "High Risk"
+    elif high_risk_count >= 1 or moderate_risk_count >= 3:
+        return "Moderate"
+    elif moderate_risk_count >= 1:
+        return "Moderate"
+    else:
+        return "Safe"
+
+def get_travel_advice(status: str, reports: list) -> str:
+    """Generate travel advice based on road status"""
+    if status == "High Risk":
+        return """
+        🚨 **HIGH RISK - AVOID TRAVEL IF POSSIBLE**
+        
+        • **Immediate Actions:**
+          - Avoid this route entirely if possible
+          - If travel is essential, travel in groups
+          - Inform someone of your travel plans
+          - Have emergency contacts readily available
+        
+        • **Safety Measures:**
+          - Travel during daylight hours only
+          - Use main roads and avoid shortcuts
+          - Keep doors locked and windows up
+          - Have a fully charged phone
+        
+        • **Emergency Contacts:**
+          - Police: 112
+          - Emergency: 0800-112-1199
+          - Road Safety: 122
+        """
+    elif status == "Moderate":
+        return """
+        ⚠️ **MODERATE RISK - EXERCISE CAUTION**
+        
+        • **Travel Recommendations:**
+          - Plan your route in advance
+          - Allow extra travel time
+          - Stay alert to surroundings
+          - Follow local traffic advisories
+        
+        • **Safety Tips:**
+          - Travel during daylight when possible
+          - Keep emergency contacts handy
+          - Monitor local news for updates
+          - Have alternative routes planned
+        
+        • **Emergency Contacts:**
+          - Police: 112
+          - Emergency: 0800-112-1199
+        """
+    else:
+        return """
+        ✅ **SAFE TO TRAVEL - NORMAL PRECAUTIONS**
+        
+        • **Standard Safety:**
+          - Follow normal traffic rules
+          - Stay alert while driving
+          - Keep emergency contacts available
+          - Monitor for any changes in conditions
+        
+        • **General Tips:**
+          - Maintain your vehicle properly
+          - Have basic emergency supplies
+          - Know your route before traveling
+          - Stay informed about weather conditions
+        """
+
+def get_alternative_routes(road_name: str, state: str) -> list:
+    """Get alternative routes for a road"""
+    # This would typically connect to a mapping API
+    # For now, return some common alternatives
+    alternatives = {
+        "Lagos-Ibadan Expressway": [
+            {"name": "Ikorodu-Sagamu Road", "description": "Alternative route through Ikorodu", "time": "+30 minutes"},
+            {"name": "Epe-Ijebu Ode Road", "description": "Coastal route through Epe", "time": "+45 minutes"}
+        ],
+        "Third Mainland Bridge": [
+            {"name": "Carter Bridge", "description": "Alternative bridge crossing", "time": "+15 minutes"},
+            {"name": "Eko Bridge", "description": "Another bridge option", "time": "+20 minutes"}
+        ],
+        "Lekki-Epe Expressway": [
+            {"name": "Victoria Island-Epe Road", "description": "Coastal alternative route", "time": "+25 minutes"},
+            {"name": "Ikorodu-Epe Road", "description": "Inland alternative", "time": "+35 minutes"}
+        ]
+    }
+    
+    return alternatives.get(road_name, [])
 
 if __name__ == "__main__":
     main() 

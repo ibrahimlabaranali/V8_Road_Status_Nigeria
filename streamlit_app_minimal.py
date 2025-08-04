@@ -200,7 +200,7 @@ def init_database():
                 phone_number TEXT NOT NULL UNIQUE,
                 email TEXT,
                 role TEXT NOT NULL,
-                nin_or_passport TEXT NOT NULL UNIQUE,
+                nin_or_passport TEXT,
                 password_hash TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -391,8 +391,10 @@ def validate_phone(phone: str) -> bool:
         return True
 
 def validate_nin(nin: str) -> bool:
-    """NIN validation (11 digits)"""
+    """NIN validation (11 digits) - Optional field"""
     try:
+        if not nin:  # Allow empty NIN
+            return True
         return nin.isdigit() and len(nin) == 11
     except Exception:
         return True
@@ -415,7 +417,7 @@ def check_user_exists(email: str = None, phone: str = None, nin: str = None) -> 
                 conn.close()
                 return True
         
-        if nin:
+        if nin and nin.strip():  # Only check NIN if it's provided and not empty
             cursor.execute('SELECT id FROM users WHERE nin_or_passport = ?', (nin,))
             if cursor.fetchone():
                 conn.close()
@@ -439,16 +441,16 @@ def register_user(user_data: dict) -> tuple[bool, str]:
         if user_data.get('email') and not validate_email(user_data['email']):
             return False, "Invalid email format"
         
-        if not validate_nin(user_data['nin_or_passport']):
-            return False, "NIN must be exactly 11 digits"
+        if user_data.get('nin_or_passport') and not validate_nin(user_data['nin_or_passport']):
+            return False, "NIN must be exactly 11 digits if provided"
         
         # Check if user already exists
         if check_user_exists(
             email=user_data.get('email'),
             phone=user_data['phone_number'],
-            nin=user_data['nin_or_passport']
+            nin=user_data.get('nin_or_passport')
         ):
-            return False, "User with this email, phone, or NIN already exists"
+            return False, "User with this email or phone number already exists"
         
         # Hash password
         hashed_password = hash_password(user_data['password'])
@@ -1215,9 +1217,6 @@ def show_login_page():
             else:
                 st.warning(f"⚠️ {strength_msg}")
         
-        # Remember me option
-        remember_me = st.checkbox("Remember me (extends session to 2 hours)")
-        
         submit = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
         
         if submit:
@@ -1231,10 +1230,6 @@ def show_login_page():
                 success, user_data, message = authenticate_user(identifier, password)
             
             if success:
-                # Extend session if remember me is checked
-                if remember_me:
-                    st.session_state.user['login_time'] = datetime.now().isoformat()
-                
                 st.success(f"✅ {message}")
                 st.balloons()
                 time.sleep(1)
@@ -1304,26 +1299,79 @@ def show_admin_login_page():
 def show_registration_page():
     st.header("📝 User Registration")
     
+    # Display Terms and Conditions
+    st.subheader("📋 Terms and Conditions")
+    st.markdown("""
+    **Please read and agree to the following terms before registering:**
+    
+    ### 🛣️ Nigerian Road Risk Reporter - Terms of Service
+    
+    **1. Service Description**
+    This application provides a platform for reporting and sharing road-related risks and incidents across Nigeria. Users can submit reports, view community reports, and receive safety advice.
+    
+    **2. Risk Information Disclaimer**
+    - All risk reports and safety advice provided through this platform are **SUGGESTIONS ONLY**
+    - Information shared is based on user submissions and automated data collection
+    - We do not guarantee the accuracy, completeness, or reliability of any information
+    - Users should exercise their own judgment and verify information independently
+    - The platform is not responsible for any decisions made based on the information provided
+    
+    **3. User Responsibilities**
+    - Provide accurate and truthful information when submitting reports
+    - Do not submit false or misleading reports
+    - Respect other users and maintain appropriate conduct
+    - Use the platform responsibly and in accordance with local laws
+    
+    **4. Privacy and Data**
+    - Personal information is collected for account management and service provision
+    - Location data may be collected when submitting reports
+    - We implement security measures to protect user data
+    - Data may be shared with authorities if required by law
+    
+    **5. Limitation of Liability**
+    - The platform and its operators are not liable for any damages or losses
+    - Users use the service at their own risk
+    - We are not responsible for any accidents, injuries, or property damage
+    
+    **6. Service Availability**
+    - The service is provided "as is" without warranties
+    - We may modify, suspend, or discontinue the service at any time
+    - Technical issues may affect service availability
+    
+    **7. Updates to Terms**
+    - These terms may be updated periodically
+    - Continued use of the service constitutes acceptance of updated terms
+    
+    **By registering, you acknowledge that you have read, understood, and agree to these terms.**
+    """)
+    
+    # Terms agreement checkbox
+    terms_agreed = st.checkbox("✅ I have read, understood, and agree to the Terms and Conditions above", key="terms_agreement")
+    
+    if not terms_agreed:
+        st.warning("⚠️ You must agree to the Terms and Conditions to proceed with registration.")
+        return
+    
     with st.form("registration_form"):
         st.subheader("Personal Information")
-        full_name = st.text_input("Full Name", placeholder="Enter your full name")
-        phone_number = st.text_input("Phone Number", placeholder="+2348012345678")
+        full_name = st.text_input("Full Name *", placeholder="Enter your full name")
+        phone_number = st.text_input("Phone Number *", placeholder="+2348012345678")
         email = st.text_input("Email (Optional)", placeholder="your.email@example.com")
         
         st.subheader("Role & Identification")
-        role = st.selectbox("Role", ["Public", "Driver", "Admin"])
-        nin_or_passport = st.text_input("NIN (11 digits)", placeholder="12345678901")
+        role = st.selectbox("Role *", ["Public", "Driver", "Admin"])
+        nin_or_passport = st.text_input("NIN (Optional - 11 digits)", placeholder="12345678901", help="National Identity Number is optional")
         
         st.subheader("Security")
-        password = st.text_input("Password", type="password", placeholder="Create a strong password")
-        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
+        password = st.text_input("Password *", type="password", placeholder="Create a strong password")
+        confirm_password = st.text_input("Confirm Password *", type="password", placeholder="Confirm your password")
         
         submit = st.form_submit_button("Register", type="primary")
         
         if submit:
             # Basic validation
-            if not all([full_name, phone_number, role, nin_or_passport, password, confirm_password]):
-                st.error("Please fill in all required fields")
+            if not all([full_name, phone_number, role, password, confirm_password]):
+                st.error("Please fill in all required fields (marked with *)")
                 return
             
             if password != confirm_password:
@@ -1340,7 +1388,7 @@ def show_registration_page():
                 'phone_number': phone_number,
                 'email': email,
                 'role': role,
-                'nin_or_passport': nin_or_passport,
+                'nin_or_passport': nin_or_passport if nin_or_passport else None,
                 'password': password
             }
             
@@ -1384,6 +1432,13 @@ def show_dashboard():
     
     # Live Road Status - Last 24 Hours
     st.subheader("🚨 Live Road Status - Last 24 Hours")
+    
+    # Disclaimer
+    st.warning("""
+    ⚠️ **DISCLAIMER**: All risk information displayed is based on user reports and automated data collection. 
+    This information is provided as **SUGGESTIONS ONLY** and should not be the sole basis for travel decisions. 
+    Please exercise your own judgment and verify information independently.
+    """)
     
     # Import live data if needed
     if st.button("🔄 Refresh Live Data", type="secondary"):
@@ -1606,12 +1661,15 @@ def show_submit_report():
                             # Save advice to database
                             save_advice_to_database(report_data.get('id', 0), advice_data)
                             
-                            # Display advice
+                            # Display advice with disclaimer
                             st.markdown("""
                             <div class="info-box">
                                 <h4>🤖 AI Safety Advice</h4>
                                 <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
                                     {}
+                                </div>
+                                <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 0.5rem; border-radius: 5px; margin-top: 0.5rem; font-size: 0.9em;">
+                                    ⚠️ <strong>Disclaimer:</strong> This advice is for informational purposes only. Please exercise your own judgment and verify information independently.
                                 </div>
                             </div>
                             """.format(advice_data["advice"].replace('\n', '<br>')), unsafe_allow_html=True)
@@ -1626,6 +1684,9 @@ def show_submit_report():
                             <h4>⚠️ Basic Safety Advice</h4>
                             <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 5px; margin: 1rem 0;">
                                 {basic_advice}
+                            </div>
+                            <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 0.5rem; border-radius: 5px; margin-top: 0.5rem; font-size: 0.9em;">
+                                ⚠️ <strong>Disclaimer:</strong> This advice is for informational purposes only. Please exercise your own judgment and verify information independently.
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
@@ -2922,6 +2983,15 @@ def show_config_panel():
 
 def show_ai_advice_page():
     """Display AI Safety Advice page"""
+    
+    # Disclaimer
+    st.warning("""
+    ⚠️ **IMPORTANT DISCLAIMER**: 
+    All safety advice and risk information provided through this platform are **SUGGESTIONS ONLY**. 
+    Users should exercise their own judgment and verify information independently. 
+    The platform is not responsible for any decisions made based on the information provided.
+    """)
+    
     try:
         from ai_advice import display_advice_interface
         display_advice_interface()

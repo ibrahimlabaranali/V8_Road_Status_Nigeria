@@ -273,7 +273,8 @@ def authenticate_user_secure(identifier: str, password: str) -> tuple[bool, dict
         
         # Find user by email or phone
         cursor.execute('''
-            SELECT id, full_name, email, phone_number, role, password_hash, account_locked
+            SELECT id, full_name, phone_number, email, role, nin_or_passport, password_hash, 
+                   two_factor_enabled, account_locked, created_at, last_login, failed_attempts
             FROM users 
             WHERE (email = ? OR phone_number = ?)
         ''', (identifier, identifier))
@@ -285,7 +286,7 @@ def authenticate_user_secure(identifier: str, password: str) -> tuple[bool, dict
             log_login_attempt(identifier, False, "User not found")
             return False, {}, "Invalid email/phone or password"
         
-        user_id, full_name, email, phone, role, password_hash, account_locked = user
+        user_id, full_name, phone, email, role, nin_or_passport, password_hash, two_factor_enabled, account_locked, created_at, last_login, failed_attempts = user
         
         # Check if account is locked
         if account_locked:
@@ -345,7 +346,8 @@ def authenticate_user_fallback(identifier: str, password: str) -> tuple[bool, di
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT id, full_name, email, phone_number, role, password_hash
+            SELECT id, full_name, phone_number, email, role, nin_or_passport, password_hash, 
+                   two_factor_enabled, account_locked, created_at, last_login, failed_attempts
             FROM users 
             WHERE (email = ? OR phone_number = ?)
         ''', (identifier, identifier))
@@ -356,7 +358,7 @@ def authenticate_user_fallback(identifier: str, password: str) -> tuple[bool, di
             conn.close()
             return False, {}, "Invalid email/phone or password"
         
-        user_id, full_name, email, phone, role, password_hash = user
+        user_id, full_name, phone, email, role, nin_or_passport, password_hash, two_factor_enabled, account_locked, created_at, last_login, failed_attempts = user
         
         # Verify password (basic)
         if hashlib.sha256(password.encode('utf-8')).hexdigest() != password_hash:

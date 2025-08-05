@@ -4,8 +4,12 @@ streamlit>=1.28.0
 pandas>=2.1.0
 plotly>=5.17.0
 
-# Security and encryption (optional - has fallback)
+# Critical Security Dependencies
+bcrypt>=4.0.1
 cryptography>=41.0.0
+python-magic>=0.4.27
+redis>=5.0.0
+pyotp>=2.9.0
 
 # Data processing (Python 3.13 compatible versions)
 numpy>=1.26.0

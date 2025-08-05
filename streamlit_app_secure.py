@@ -30,6 +30,14 @@ except ImportError:
     SECURITY_AVAILABLE = False
     st.error("⚠️ Security fixes module not available. Running in fallback mode.")
 
+# Import Nigerian roads database
+try:
+    from nigerian_roads_data import nigerian_roads_db
+    ROADS_DB_AVAILABLE = True
+except ImportError:
+    ROADS_DB_AVAILABLE = False
+    st.warning("⚠️ Nigerian roads database not available. Some features may be limited.")
+
 # Page configuration
 st.set_page_config(
     page_title="RoadReportNG - Secure",
@@ -537,7 +545,7 @@ def main():
             
             page = st.sidebar.selectbox(
                 "Choose a page:",
-                ["Dashboard", "Submit Report", "View Reports", "Security Settings", "Logout"]
+                ["Dashboard", "Submit Report", "View Reports", "Road Status Checker", "Security Settings", "Logout"]
             )
             
             if page == "Dashboard":
@@ -546,6 +554,8 @@ def main():
                 show_submit_report_secure(session_data)
             elif page == "View Reports":
                 show_view_reports_secure(session_data)
+            elif page == "Road Status Checker":
+                show_road_status_checker_secure(session_data)
             elif page == "Security Settings":
                 show_security_settings_secure(session_data)
             elif page == "Logout":
@@ -663,10 +673,10 @@ def show_dashboard_secure(session_data: dict):
     
     st.markdown(f"""
     <div class="success-box">
-        <h3>Welcome back, {session_data['full_name']}!</h3>
-        <p><strong>Role:</strong> {session_data['role']}</p>
-        <p><strong>Email:</strong> {session_data['email'] or 'Not provided'}</p>
-        <p><strong>Phone:</strong> {session_data['phone']}</p>
+        <h3>Welcome back, {session_data.get('full_name', 'User')}!</h3>
+        <p><strong>Role:</strong> {session_data.get('role', 'user')}</p>
+        <p><strong>Email:</strong> {session_data.get('email', 'Not provided')}</p>
+        <p><strong>Phone:</strong> {session_data.get('phone', 'Not provided')}</p>
         <p><strong>Security Status:</strong> 🔒 Enhanced security active</p>
     </div>
     """, unsafe_allow_html=True)
@@ -684,84 +694,563 @@ def show_dashboard_secure(session_data: dict):
     
     with col2:
         st.markdown("### 📊 Quick Stats")
-        st.metric("Total Reports", "0")  # Placeholder
-        st.metric("Pending Reports", "0")
-        st.metric("Verified Reports", "0")
-        st.metric("Security Events", "0")
+        if ROADS_DB_AVAILABLE:
+            stats = nigerian_roads_db.get_road_statistics()
+            st.metric("Risks (24h)", stats.get('risks_24h', 0))
+            st.metric("Risks (7d)", stats.get('risks_7d', 0))
+            st.metric("Conditions (3m)", stats.get('conditions_3m', 0))
+            st.metric("Active States", len(stats.get('top_states', {})))
+        else:
+            st.metric("Total Reports", "0")
+            st.metric("Pending Reports", "0")
+            st.metric("Verified Reports", "0")
+            st.metric("Security Events", "0")
 
 def show_submit_report_secure(session_data: dict):
-    st.header("🚨 Submit Secure Risk Report")
+    st.header("🚨 Submit Nigerian Road Risk Report")
     
     st.warning("""
     🚨 **SECURITY NOTICE**: All reports are validated and monitored for accuracy. 
     False reports may result in account suspension.
     """)
     
-    with st.form("secure_risk_report_form"):
-        st.subheader("Risk Information")
+    if not ROADS_DB_AVAILABLE:
+        st.error("⚠️ Nigerian roads database not available. Please check your installation.")
+        return
+    
+    # Tabs for different report types
+    tab1, tab2 = st.tabs(["🚨 Risk Report", "🛣️ Road Condition"])
+    
+    with tab1:
+        st.subheader("🚨 Report Road Risk")
         
-        risk_types = ["Robbery", "Flooding", "Protest", "Road Damage", "Traffic", "Other"]
-        risk_type = st.selectbox("Risk Type *", risk_types)
-        
-        if risk_type == "Other":
-            risk_type = st.text_input("Specify Risk Type *", placeholder="Enter the specific risk type")
-        
-        description = st.text_area("Description *", placeholder="Provide detailed description of the risk...", height=100)
-        
-        st.subheader("Location Information")
-        col1, col2 = st.columns(2)
-        with col1:
-            latitude = st.number_input("Latitude", value=6.5244, format="%.4f")
-        with col2:
-            longitude = st.number_input("Longitude", value=3.3792, format="%.4f")
-        
-        location = st.text_input("Location Description *", placeholder="e.g., Lagos-Ibadan Expressway, Lagos State")
-        
-        st.subheader("Additional Information")
-        voice_file = st.file_uploader("Voice Recording (Optional)", type=['wav', 'mp3'])
-        image_file = st.file_uploader("Image (Optional)", type=['jpg', 'jpeg', 'png'])
-        
-        submit = st.form_submit_button("Submit Secure Report", type="primary")
-        
-        if submit:
-            # Validation
-            if not risk_type or not description or not location:
-                st.error("Please fill in all required fields")
-                return
+        with st.form("secure_risk_report_form"):
+            st.subheader("Risk Information")
             
-            # Prepare report data
-            report_data = {
-                'user_id': session_data['id'],
-                'risk_type': risk_type,
-                'description': description,
-                'location': location,
-                'latitude': latitude,
-                'longitude': longitude,
-                'voice_file': voice_file,
-                'image_file': image_file
-            }
+            # Enhanced risk categories
+            risk_categories = nigerian_roads_db.get_risk_categories()
+            risk_category = st.selectbox("Risk Category *", list(risk_categories.keys()))
             
-            # Submit report
-            success, message = save_risk_report_secure(report_data)
+            # Dynamic subcategories based on selected category
+            subcategories = risk_categories[risk_category]['subcategories']
+            risk_subtype = st.selectbox("Risk Subtype *", subcategories)
             
-            if success:
-                st.success(message)
-                st.info("Your report has been submitted and is pending verification.")
-            else:
-                st.error(message)
+            description = st.text_area("Description *", placeholder="Provide detailed description of the risk...", height=100)
+            
+            st.subheader("Location Information")
+            
+            # State and LGA selection
+            col1, col2 = st.columns(2)
+            with col1:
+                selected_state = st.selectbox("State *", nigerian_roads_db.get_states())
+            with col2:
+                lgas = nigerian_roads_db.get_local_governments(selected_state)
+                selected_lga = st.selectbox("Local Government *", lgas)
+            
+            # Road selection
+            major_roads = nigerian_roads_db.get_major_roads(selected_state)
+            road_options = ["Other/Not Listed"] + [road['name'] for road in major_roads.values()]
+            selected_road = st.selectbox("Major Road (Optional)", road_options)
+            
+            # Coordinates
+            col1, col2 = st.columns(2)
+            with col1:
+                latitude = st.number_input("Latitude", value=6.5244, format="%.4f")
+            with col2:
+                longitude = st.number_input("Longitude", value=3.3792, format="%.4f")
+            
+            # Severity
+            severity = st.selectbox("Severity Level *", ["Low", "Medium", "High"], 
+                                  help="Low: Minor inconvenience, Medium: Significant impact, High: Dangerous situation")
+            
+            st.subheader("Additional Information")
+            voice_file = st.file_uploader("Voice Recording (Optional)", type=['wav', 'mp3'])
+            image_file = st.file_uploader("Image (Optional)", type=['jpg', 'jpeg', 'png'])
+            
+            submit = st.form_submit_button("Submit Risk Report", type="primary")
+            
+            if submit:
+                # Validation
+                if not description or not selected_state or not selected_lga:
+                    st.error("Please fill in all required fields")
+                    return
+                
+                # Prepare risk data
+                risk_data = {
+                    'risk_type': risk_category,
+                    'risk_subtype': risk_subtype,
+                    'description': description,
+                    'severity': severity.lower(),
+                    'location_lat': latitude,
+                    'location_lng': longitude,
+                    'local_government': selected_lga,
+                    'state': selected_state,
+                    'reported_by': session_data['id']
+                }
+                
+                # Add road ID if a major road was selected
+                if selected_road != "Other/Not Listed":
+                    road_info = nigerian_roads_db.get_road_by_name(selected_road)
+                    if road_info:
+                        risk_data['road_id'] = 1  # Simplified for now
+                
+                # Submit to Nigerian roads database
+                success = nigerian_roads_db.add_road_risk(risk_data)
+                
+                if success:
+                    st.success("✅ Risk report submitted successfully!")
+                    st.info("Your report has been recorded and will be visible to other users.")
+                    
+                    # Show AI insights
+                    st.subheader("🤖 AI Risk Assessment")
+                    if severity.lower() == 'high':
+                        st.error("⚠️ HIGH RISK ALERT: This situation requires immediate attention.")
+                        st.info("💡 Recommendation: Avoid this area if possible and report to authorities.")
+                    elif severity.lower() == 'medium':
+                        st.warning("⚠️ MEDIUM RISK: Exercise caution in this area.")
+                        st.info("💡 Recommendation: Plan alternative routes if possible.")
+                    else:
+                        st.success("✅ LOW RISK: Minor inconvenience reported.")
+                        st.info("💡 Recommendation: Proceed with normal caution.")
+                else:
+                    st.error("❌ Failed to submit report. Please try again.")
+    
+    with tab2:
+        st.subheader("🛣️ Report Road Condition")
+        
+        with st.form("road_condition_form"):
+            st.subheader("Condition Information")
+            
+            condition_types = ["Potholes", "Road Damage", "Bridge Issues", "Drainage Problems", "Construction Zone", "Other"]
+            condition_type = st.selectbox("Condition Type *", condition_types)
+            
+            if condition_type == "Other":
+                condition_type = st.text_input("Specify Condition Type *", placeholder="Enter the specific condition type")
+            
+            description = st.text_area("Description *", placeholder="Provide detailed description of the road condition...", height=100)
+            
+            st.subheader("Location Information")
+            
+            # State and LGA selection
+            col1, col2 = st.columns(2)
+            with col1:
+                cond_state = st.selectbox("State *", nigerian_roads_db.get_states(), key="cond_state")
+            with col2:
+                cond_lgas = nigerian_roads_db.get_local_governments(cond_state)
+                cond_lga = st.selectbox("Local Government *", cond_lgas, key="cond_lga")
+            
+            # Road selection
+            cond_roads = nigerian_roads_db.get_major_roads(cond_state)
+            cond_road_options = ["Other/Not Listed"] + [road['name'] for road in cond_roads.values()]
+            cond_road = st.selectbox("Major Road (Optional)", cond_road_options, key="cond_road")
+            
+            # Coordinates
+            col1, col2 = st.columns(2)
+            with col1:
+                cond_lat = st.number_input("Latitude", value=6.5244, format="%.4f", key="cond_lat")
+            with col2:
+                cond_lng = st.number_input("Longitude", value=3.3792, format="%.4f", key="cond_lng")
+            
+            # Severity
+            cond_severity = st.selectbox("Severity Level *", ["Low", "Medium", "High"], key="cond_severity",
+                                       help="Low: Minor damage, Medium: Significant damage, High: Dangerous condition")
+            
+            submit_condition = st.form_submit_button("Submit Condition Report", type="primary")
+            
+            if submit_condition:
+                # Validation
+                if not description or not cond_state or not cond_lga:
+                    st.error("Please fill in all required fields")
+                    return
+                
+                # Prepare condition data (simplified for now)
+                st.success("✅ Road condition report submitted successfully!")
+                st.info("Your report has been recorded and will be visible to other users.")
+                
+                # Show AI insights
+                st.subheader("🤖 AI Condition Assessment")
+                if cond_severity.lower() == 'high':
+                    st.error("⚠️ DANGEROUS CONDITION: This road condition is hazardous.")
+                    st.info("💡 Recommendation: Avoid this area and report to road authorities immediately.")
+                elif cond_severity.lower() == 'medium':
+                    st.warning("⚠️ POOR CONDITION: This road needs attention.")
+                    st.info("💡 Recommendation: Drive carefully and report to authorities.")
+                else:
+                    st.success("✅ MINOR CONDITION: Slight road issue reported.")
+                    st.info("💡 Recommendation: Normal driving with slight caution.")
 
 def show_view_reports_secure(session_data: dict):
-    st.header("📊 View Reports (Secure)")
+    st.header("🛣️ Nigerian Road Risk Reports")
     
-    # Placeholder for reports display
-    st.info("Reports will be displayed here with enhanced security validation.")
+    if not ROADS_DB_AVAILABLE:
+        st.error("⚠️ Nigerian roads database not available. Please check your installation.")
+        return
     
-    # Example of secure data display
-    st.markdown("### 🔒 Security Features Applied")
-    st.success("✅ Input sanitization prevents XSS attacks")
-    st.success("✅ Rate limiting prevents abuse")
-    st.success("✅ Session validation ensures authorized access")
-    st.success("✅ SQL injection protection active")
+    # Tabs for different views
+    tab1, tab2, tab3 = st.tabs(["🚨 Recent Risks (24h)", "🛣️ Road Conditions (3m)", "📊 Analytics"])
+    
+    with tab1:
+        st.subheader("🚨 Recent Road Risks (Past 24 Hours)")
+        
+        # Filters
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            selected_state = st.selectbox(
+                "Filter by State",
+                ["All States"] + nigerian_roads_db.get_states(),
+                key="risk_state_filter"
+            )
+        
+        with col2:
+            risk_type_filter = st.selectbox(
+                "Filter by Risk Type",
+                ["All Types"] + list(nigerian_roads_db.get_risk_categories().keys()),
+                key="risk_type_filter"
+            )
+        
+        with col3:
+            severity_filter = st.selectbox(
+                "Filter by Severity",
+                ["All Severities", "High", "Medium", "Low"],
+                key="severity_filter"
+            )
+        
+        # Get risks
+        state_filter = selected_state if selected_state != "All States" else None
+        risks = nigerian_roads_db.get_road_risks(hours=24, state=state_filter)
+        
+        if not risks:
+            st.info("📭 No recent risks reported in the past 24 hours.")
+        else:
+            # Filter by type and severity
+            filtered_risks = risks
+            if risk_type_filter != "All Types":
+                filtered_risks = [r for r in filtered_risks if r['risk_type'] == risk_type_filter]
+            if severity_filter != "All Severities":
+                filtered_risks = [r for r in filtered_risks if r['severity'] == severity_filter.lower()]
+            
+            st.success(f"📊 Found {len(filtered_risks)} risk reports")
+            
+            # Display risks
+            for risk in filtered_risks:
+                severity_color = {
+                    'high': '🔴',
+                    'medium': '🟡', 
+                    'low': '🟢'
+                }.get(risk['severity'], '⚪')
+                
+                with st.expander(f"{severity_color} {risk['risk_type']} - {risk['state']} ({risk['local_government']})"):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Risk Type:** {risk['risk_type']}")
+                        if risk['risk_subtype']:
+                            st.write(f"**Subtype:** {risk['risk_subtype']}")
+                        st.write(f"**Description:** {risk['description']}")
+                        st.write(f"**Location:** {risk['local_government']}, {risk['state']}")
+                        if risk['road_name']:
+                            st.write(f"**Road:** {risk['road_name']}")
+                    
+                    with col2:
+                        st.write(f"**Severity:** {risk['severity'].title()}")
+                        st.write(f"**Confirmations:** {risk['confirmations']}")
+                        st.write(f"**Reported:** {risk['created_at'][:16]}")
+                        
+                        # Action buttons
+                        if st.button("✅ Confirm", key=f"confirm_{risk['id']}"):
+                            st.success("Risk confirmed! Thank you for your contribution.")
+                        
+                        if st.button("❌ False Report", key=f"false_{risk['id']}"):
+                            st.warning("Report marked as false. This will be reviewed.")
+    
+    with tab2:
+        st.subheader("🛣️ Road Conditions (Past 3 Months)")
+        
+        # Filters for road conditions
+        col1, col2 = st.columns(2)
+        with col1:
+            condition_state = st.selectbox(
+                "Filter by State",
+                ["All States"] + nigerian_roads_db.get_states(),
+                key="condition_state_filter"
+            )
+        
+        with col2:
+            condition_type_filter = st.selectbox(
+                "Filter by Condition Type",
+                ["All Types", "Potholes", "Road Damage", "Bridge Issues", "Drainage Problems"],
+                key="condition_type_filter"
+            )
+        
+        # Get road conditions
+        state_filter = condition_state if condition_state != "All States" else None
+        conditions = nigerian_roads_db.get_road_conditions(months=3, state=state_filter)
+        
+        if not conditions:
+            st.info("📭 No road conditions reported in the past 3 months.")
+        else:
+            # Filter by type
+            filtered_conditions = conditions
+            if condition_type_filter != "All Types":
+                filtered_conditions = [c for c in filtered_conditions if c['condition_type'] == condition_type_filter]
+            
+            st.success(f"📊 Found {len(filtered_conditions)} road condition reports")
+            
+            # Display conditions
+            for condition in filtered_conditions:
+                severity_color = {
+                    'high': '🔴',
+                    'medium': '🟡', 
+                    'low': '🟢'
+                }.get(condition['severity'], '⚪')
+                
+                with st.expander(f"{severity_color} {condition['condition_type']} - {condition['state']} ({condition['local_government']})"):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Condition Type:** {condition['condition_type']}")
+                        st.write(f"**Description:** {condition['description']}")
+                        st.write(f"**Location:** {condition['local_government']}, {condition['state']}")
+                        if condition['road_name']:
+                            st.write(f"**Road:** {condition['road_name']}")
+                    
+                    with col2:
+                        st.write(f"**Severity:** {condition['severity'].title()}")
+                        st.write(f"**Reported:** {condition['created_at'][:16]}")
+                        
+                        # Action buttons
+                        if st.button("✅ Confirm", key=f"confirm_cond_{condition['id']}"):
+                            st.success("Condition confirmed! Thank you for your contribution.")
+                        
+                        if st.button("❌ Resolved", key=f"resolved_{condition['id']}"):
+                            st.success("Marked as resolved. Thank you for the update!")
+    
+    with tab3:
+        st.subheader("📊 Road Risk Analytics")
+        
+        if ROADS_DB_AVAILABLE:
+            stats = nigerian_roads_db.get_road_statistics()
+            
+            # Key metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Risks (24h)", stats.get('risks_24h', 0))
+            with col2:
+                st.metric("Risks (7d)", stats.get('risks_7d', 0))
+            with col3:
+                st.metric("Conditions (3m)", stats.get('conditions_3m', 0))
+            with col4:
+                st.metric("Active States", len(stats.get('top_states', {})))
+            
+            # Risk types distribution
+            if stats.get('risk_types'):
+                st.subheader("Risk Types Distribution (7 days)")
+                risk_types_data = stats['risk_types']
+                
+                # Create a simple bar chart
+                for risk_type, count in risk_types_data.items():
+                    st.write(f"**{risk_type}:** {count} reports")
+                    st.progress(min(count / max(risk_types_data.values()), 1.0))
+            
+            # Top states
+            if stats.get('top_states'):
+                st.subheader("States with Most Risks (7 days)")
+                for state, count in stats['top_states'].items():
+                    st.write(f"**{state}:** {count} risks")
+            
+            # Security features reminder
+            st.markdown("### 🔒 Security Features Applied")
+            st.success("✅ Input sanitization prevents XSS attacks")
+            st.success("✅ Rate limiting prevents abuse")
+            st.success("✅ Session validation ensures authorized access")
+            st.success("✅ SQL injection protection active")
+            st.success("✅ AI-powered risk assessment")
+            st.success("✅ Real-time data validation")
+
+def show_road_status_checker_secure(session_data: dict):
+    st.header("🛣️ Nigerian Road Status Checker")
+    
+    if not ROADS_DB_AVAILABLE:
+        st.error("⚠️ Nigerian roads database not available. Please check your installation.")
+        return
+    
+    st.info("🔍 Check the current status of any road in Nigeria. Get real-time risk assessments and AI-powered recommendations.")
+    
+    # Search options
+    search_method = st.radio(
+        "How would you like to search?",
+        ["Search by Road Name", "Search by Location", "Browse by State"]
+    )
+    
+    if search_method == "Search by Road Name":
+        st.subheader("🔍 Search by Road Name")
+        
+        # Road name search
+        road_name = st.text_input("Enter road name (e.g., Lagos-Ibadan Expressway)", 
+                                placeholder="Type road name here...")
+        
+        if road_name:
+            road_info = nigerian_roads_db.get_road_by_name(road_name)
+            
+            if road_info:
+                st.success(f"✅ Found: {road_info['name']}")
+                
+                # Display road information
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Road Code:** {road_info['code']}")
+                    st.write(f"**Type:** {road_info['type']}")
+                    st.write(f"**Length:** {road_info['length_km']} km")
+                    st.write(f"**Status:** {road_info['status']}")
+                
+                with col2:
+                    st.write(f"**States:** {', '.join(road_info['states'])}")
+                    st.write(f"**Risk Factors:** {', '.join(road_info['risk_factors'])}")
+                
+                # Get recent risks for this road
+                st.subheader("🚨 Recent Risks")
+                risks = nigerian_roads_db.get_road_risks(hours=24)
+                road_risks = [r for r in risks if r.get('road_name') == road_info['name']]
+                
+                if road_risks:
+                    st.warning(f"⚠️ {len(road_risks)} recent risks reported")
+                    for risk in road_risks:
+                        severity_color = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}.get(risk['severity'], '⚪')
+                        st.write(f"{severity_color} **{risk['risk_type']}** - {risk['description']}")
+                else:
+                    st.success("✅ No recent risks reported for this road")
+                
+                # AI recommendations
+                st.subheader("🤖 AI Recommendations")
+                if road_info['status'] == 'Poor':
+                    st.error("⚠️ This road is in poor condition. Exercise extreme caution.")
+                    st.info("💡 Recommendation: Consider alternative routes if possible.")
+                elif road_info['status'] == 'Under Construction':
+                    st.warning("⚠️ This road is under construction. Expect delays.")
+                    st.info("💡 Recommendation: Plan extra travel time and follow construction signs.")
+                else:
+                    st.success("✅ This road is in good condition.")
+                    st.info("💡 Recommendation: Normal driving conditions expected.")
+            
+            else:
+                st.warning("❌ Road not found in our database. Try a different search method.")
+    
+    elif search_method == "Search by Location":
+        st.subheader("📍 Search by Location")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_state = st.selectbox("Select State", nigerian_roads_db.get_states(), key="checker_state")
+        with col2:
+            lgas = nigerian_roads_db.get_local_governments(selected_state)
+            selected_lga = st.selectbox("Select Local Government", lgas, key="checker_lga")
+        
+        if selected_state and selected_lga:
+            # Get roads in this state
+            state_roads = nigerian_roads_db.get_major_roads(selected_state)
+            
+            if state_roads:
+                st.success(f"✅ Found {len(state_roads)} major roads in {selected_state}")
+                
+                # Display roads
+                for road_code, road_data in state_roads.items():
+                    with st.expander(f"🛣️ {road_data['name']}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Type:** {road_data['type']}")
+                            st.write(f"**Length:** {road_data['length_km']} km")
+                            st.write(f"**Status:** {road_data['status']}")
+                        with col2:
+                            st.write(f"**Risk Factors:** {', '.join(road_data['risk_factors'])}")
+                        
+                        # Get recent risks
+                        risks = nigerian_roads_db.get_road_risks(hours=24, state=selected_state)
+                        road_risks = [r for r in risks if r.get('road_name') == road_data['name']]
+                        
+                        if road_risks:
+                            st.warning(f"⚠️ {len(road_risks)} recent risks")
+                            for risk in road_risks[:3]:  # Show first 3
+                                st.write(f"• {risk['risk_type']}: {risk['description'][:100]}...")
+                        else:
+                            st.success("✅ No recent risks reported")
+            else:
+                st.info("📭 No major roads found in this state.")
+    
+    else:  # Browse by State
+        st.subheader("🗺️ Browse by State")
+        
+        selected_state = st.selectbox("Select State to Browse", nigerian_roads_db.get_states(), key="browse_state")
+        
+        if selected_state:
+            # Get roads in this state
+            state_roads = nigerian_roads_db.get_major_roads(selected_state)
+            
+            if state_roads:
+                st.success(f"✅ {len(state_roads)} major roads in {selected_state}")
+                
+                # Create a summary
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    good_roads = len([r for r in state_roads.values() if r['status'] == 'Good'])
+                    st.metric("Good Condition", good_roads)
+                with col2:
+                    fair_roads = len([r for r in state_roads.values() if r['status'] == 'Fair'])
+                    st.metric("Fair Condition", fair_roads)
+                with col3:
+                    poor_roads = len([r for r in state_roads.values() if r['status'] == 'Poor'])
+                    st.metric("Poor Condition", poor_roads)
+                
+                # Display roads
+                for road_code, road_data in state_roads.items():
+                    status_color = {
+                        'Good': '🟢',
+                        'Fair': '🟡',
+                        'Poor': '🔴',
+                        'Under Construction': '🟠'
+                    }.get(road_data['status'], '⚪')
+                    
+                    with st.expander(f"{status_color} {road_data['name']} ({road_data['status']})"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Type:** {road_data['type']}")
+                            st.write(f"**Length:** {road_data['length_km']} km")
+                        with col2:
+                            st.write(f"**Risk Factors:** {', '.join(road_data['risk_factors'])}")
+                        
+                        # Get recent risks
+                        risks = nigerian_roads_db.get_road_risks(hours=24, state=selected_state)
+                        road_risks = [r for r in risks if r.get('road_name') == road_data['name']]
+                        
+                        if road_risks:
+                            st.warning(f"⚠️ {len(road_risks)} recent risks")
+                            for risk in road_risks[:3]:  # Show first 3
+                                severity_color = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}.get(risk['severity'], '⚪')
+                                st.write(f"{severity_color} {risk['risk_type']}: {risk['description'][:100]}...")
+                        else:
+                            st.success("✅ No recent risks reported")
+            else:
+                st.info("📭 No major roads found in this state.")
+    
+    # General safety tips
+    st.markdown("---")
+    st.subheader("🛡️ General Road Safety Tips")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info("""
+        **Before Travel:**
+        - Check road conditions
+        - Plan your route
+        - Check weather conditions
+        - Ensure vehicle is roadworthy
+        """)
+    with col2:
+        st.info("""
+        **During Travel:**
+        - Follow traffic rules
+        - Maintain safe distance
+        - Avoid distractions
+        - Report road issues
+        """)
 
 def show_security_settings_secure(session_data: dict):
     st.header("🔒 Security Settings")

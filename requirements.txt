@@ -11,7 +11,12 @@ pyotp>=2.9.0
 # Data processing
 numpy>=1.26.0
 
+# Optional dependencies for enhanced features
+# qrcode>=7.4.0  # For 2FA QR codes (optional)
+# pillow>=10.0.0  # For image processing (optional)
+
 # Note: Removed problematic dependencies for Streamlit Cloud:
 # - python-magic (not available on Streamlit Cloud)
 # - redis (not needed for basic functionality)
-# - cryptography (bcrypt is sufficient for password hashing) 
+# - cryptography (bcrypt is sufficient for password hashing)
+# - python-magic (Windows compatibility issues) 

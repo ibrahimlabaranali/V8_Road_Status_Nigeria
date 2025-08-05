@@ -517,6 +517,37 @@ class NigerianRoadsDatabase:
         except Exception as e:
             print(f"Error adding road risk: {e}")
             return False
+
+    def add_road_condition(self, condition_data: Dict) -> bool:
+        """Add a new road condition report"""
+        try:
+            conn = sqlite3.connect('nigerian_roads.db')
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO road_conditions 
+                (road_id, condition_type, description, severity, 
+                 location_lat, location_lng, local_government, state, reported_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                condition_data.get('road_id'),
+                condition_data.get('condition'),
+                condition_data.get('description'),
+                condition_data.get('severity', 'medium'),
+                condition_data.get('latitude'),
+                condition_data.get('longitude'),
+                condition_data.get('lga'),
+                condition_data.get('state'),
+                condition_data.get('reported_by', 'user')
+            ))
+            
+            conn.commit()
+            conn.close()
+            return True
+            
+        except Exception as e:
+            print(f"Error adding road condition: {e}")
+            return False
     
     def get_road_risks(self, hours: int = 24, state: str = None, road_id: int = None) -> List[Dict]:
         """Get road risks for the specified time period"""

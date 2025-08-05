@@ -1,26 +1,17 @@
-# Nigerian Road Risk Reporter - Enhanced Requirements (Python 3.13 Compatible)
+# Nigerian Road Risk Reporter - Streamlit Cloud Compatible
 # Core dependencies
 streamlit>=1.28.0
 pandas>=2.1.0
 plotly>=5.17.0
 
-# Critical Security Dependencies
+# Security dependencies (Streamlit Cloud compatible)
 bcrypt>=4.0.1
-cryptography>=41.0.0
-python-magic>=0.4.27
-redis>=5.0.0
 pyotp>=2.9.0
 
-# Data processing (Python 3.13 compatible versions)
+# Data processing
 numpy>=1.26.0
 
-# Optional: PDF generation (for analytics export)
-# fpdf2>=2.7.6
-
-# Optional: PWA support
-# streamlit-pwa>=0.1.0
-
-# Development and testing
-pytest>=7.4.0
-black>=23.11.0
-flake8>=6.1.0 
+# Note: Removed problematic dependencies for Streamlit Cloud:
+# - python-magic (not available on Streamlit Cloud)
+# - redis (not needed for basic functionality)
+# - cryptography (bcrypt is sufficient for password hashing) 

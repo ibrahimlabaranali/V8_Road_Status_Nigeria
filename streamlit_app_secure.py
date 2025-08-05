@@ -23,7 +23,7 @@ try:
         session_manager, security_logger, two_factor_auth,
         get_client_ip, check_login_attempts, log_login_attempt,
         initialize_security_database, rate_limit_decorator,
-        require_authentication, require_role
+        require_authentication, require_role, TOTP_AVAILABLE
     )
     SECURITY_AVAILABLE = True
 except ImportError:
@@ -583,7 +583,7 @@ def show_login_page_secure():
         password = st.text_input("Password", type="password", placeholder="Enter your password")
         
         # 2FA if available
-        if SECURITY_AVAILABLE and two_factor_auth.TOTP_AVAILABLE:
+        if SECURITY_AVAILABLE and TOTP_AVAILABLE:
             st.subheader("🔒 Two-Factor Authentication")
             otp = st.text_input("Enter OTP (if enabled)", placeholder="6-digit code", max_chars=6)
         else:

@@ -27,6 +27,14 @@ except ImportError:
     ROADS_DB_AVAILABLE = False
     nigerian_roads_db = None
 
+# Import enhanced reports system
+try:
+    from enhanced_reports import enhanced_reports_system
+    ENHANCED_REPORTS_AVAILABLE = True
+except ImportError:
+    ENHANCED_REPORTS_AVAILABLE = False
+    enhanced_reports_system = None
+
 # Security configuration
 SECURITY_CONFIG = {
     'session_timeout_minutes': 30,
@@ -2408,7 +2416,12 @@ def show_submit_report():
                 """, unsafe_allow_html=True)
 
 def show_view_reports():
-    st.header("📊 View Reports (Enhanced)")
+    st.header("🛣️ Enhanced Road Reports - Multi-Source Intelligence")
+    
+    # Check if enhanced reports system is available
+    if not ENHANCED_REPORTS_AVAILABLE:
+        st.error("⚠️ Enhanced reports system not available. Please check your installation.")
+        return
     
     # Account warning
     st.warning("""
@@ -2416,181 +2429,246 @@ def show_view_reports():
     All reports are community-verified and monitored for accuracy.
     """)
     
+    # Capture live reports periodically
+    if st.button("🔄 Refresh Live Reports", type="primary"):
+        with st.spinner("🔄 Capturing live reports from external sources..."):
+            captured_reports = enhanced_reports_system.capture_live_reports()
+            if captured_reports:
+                st.success(f"✅ Captured {len(captured_reports)} new live reports!")
+            else:
+                st.info("📭 No new live reports captured.")
+    
     # Enhanced tabbed interface
-    tab1, tab2, tab3 = st.tabs(["🚨 Recent Risks (24h)", "🛣️ Road Conditions (3m)", "📊 Analytics"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🚨 Live Reports (24h)", 
+        "📰 News & Media", 
+        "🏛️ Government Alerts", 
+        "📊 Analytics"
+    ])
     
     with tab1:
-        st.subheader("🚨 Recent Risk Reports (Last 24 Hours)")
+        st.subheader("🚨 Live Road Reports (Past 24 Hours)")
         
-        # Filters for recent risks
+        # Filters
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            if ROADS_DB_AVAILABLE:
-                states = ["All States"] + nigerian_roads_db.get_states()
-                state_filter = st.selectbox("Filter by State", states)
-            else:
-                state_filter = "All States"
+            selected_state = st.selectbox(
+                "Filter by State",
+                ["All States"] + (nigerian_roads_db.get_states() if ROADS_DB_AVAILABLE else ["Lagos", "Zamfara", "Kaduna", "Rivers"]),
+                key="live_state_filter"
+            )
         
         with col2:
-            risk_types = ["All Types", "Traffic", "Infrastructure", "Weather", "Security", "Environmental"]
-            risk_filter = st.selectbox("Filter by Risk Type", risk_types)
+            source_filter = st.selectbox(
+                "Filter by Source",
+                ["All Sources", "user", "news_media", "government", "social_media"],
+                key="source_filter"
+            )
         
         with col3:
-            severity_filter = st.selectbox("Filter by Severity", ["All Severities", "Low", "Medium", "High", "Critical"])
+            severity_filter = st.selectbox(
+                "Filter by Severity",
+                ["All Severities", "High", "Medium", "Low"],
+                key="live_severity_filter"
+            )
         
-        # Get recent risk reports
-        if ROADS_DB_AVAILABLE:
-            recent_risks = nigerian_roads_db.get_road_risks(hours=24)
-            
-            # Apply filters
-            if state_filter != "All States":
-                recent_risks = [r for r in recent_risks if r.get('state') == state_filter]
-            
-            if risk_filter != "All Types":
-                recent_risks = [r for r in recent_risks if r.get('risk_type') == risk_filter]
-            
-            if severity_filter != "All Severities":
-                recent_risks = [r for r in recent_risks if r.get('severity') == severity_filter]
-            
-            if recent_risks:
-                st.success(f"Found {len(recent_risks)} risk reports in the last 24 hours")
-                
-                for risk in recent_risks:
-                    with st.expander(f"🚨 {risk.get('risk_type', 'Unknown')} - {risk.get('location', 'Unknown Location')}"):
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            st.write(f"**Risk Type:** {risk.get('risk_type', 'Unknown')}")
-                            st.write(f"**Location:** 📍 {risk.get('location', 'Unknown')}")
-                            st.write(f"**Description:** {risk.get('description', 'No description')}")
-                            st.write(f"**Severity:** {risk.get('severity', 'Unknown')}")
-                            st.write(f"**Reported:** {risk.get('reported_at', 'Unknown')}")
-                        
-                        with col2:
-                            st.write(f"**State:** {risk.get('state', 'Unknown')}")
-                            st.write(f"**LGA:** {risk.get('lga', 'Unknown')}")
-                            st.write(f"**Road:** {risk.get('road_name', 'Not specified')}")
-                            
-                            # Action buttons
-                            if st.button("✅ Confirm", key=f"confirm_{risk.get('id')}"):
-                                st.success("Risk confirmed!")
-                            
-                            if st.button("❌ False Report", key=f"false_{risk.get('id')}"):
-                                st.error("Marked as false report!")
-                            
-                            if st.button("🔧 Resolved", key=f"resolve_{risk.get('id')}"):
-                                st.info("Marked as resolved!")
-            else:
-                st.info("No risk reports found in the last 24 hours.")
+        # Get enhanced reports
+        state_filter = selected_state if selected_state != "All States" else None
+        source_type_filter = source_filter if source_filter != "All Sources" else None
+        reports = enhanced_reports_system.get_reports(
+            source_type=source_type_filter,
+            state=state_filter,
+            hours=24
+        )
+        
+        if not reports:
+            st.info("📭 No live reports found in the past 24 hours.")
         else:
-            st.info("Nigerian roads database not available. Using basic reports.")
-            # Fallback to basic reports
-            recent_reports = get_recent_reports(hours=24)
-            if recent_reports:
-                for report in recent_reports[:10]:  # Show first 10
-                    report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, reporter_name, source_type, source_url = report
+            # Filter by severity
+            filtered_reports = reports
+            if severity_filter != "All Severities":
+                filtered_reports = [r for r in filtered_reports if r['severity'] == severity_filter.lower()]
+            
+            st.success(f"📊 Found {len(filtered_reports)} live reports")
+            
+            # Display reports with verification status
+            for report in filtered_reports:
+                severity_color = {
+                    'high': '🔴',
+                    'medium': '🟡', 
+                    'low': '🟢'
+                }.get(report['severity'], '⚪')
+                
+                # Source icon
+                source_icon = {
+                    'user': '👤',
+                    'news_media': '📰',
+                    'government': '🏛️',
+                    'social_media': '📱'
+                }.get(report['source_type'], '📄')
+                
+                # Verification status
+                verification_status = ""
+                if report['admin_verified']:
+                    verification_status = "✅ Admin Verified"
+                elif report['source_verified']:
+                    verification_status = "✅ Source Verified"
+                else:
+                    verification_status = "⏳ Pending Verification"
+                
+                with st.expander(f"{severity_color} {source_icon} {report['title']} - {report['state']} ({verification_status})"):
+                    col1, col2 = st.columns([2, 1])
                     
-                    with st.expander(f"🚨 {risk_type} - {location}"):
-                        st.write(f"**Description:** {description}")
-                        st.write(f"**Status:** {status}")
-                        st.write(f"**Reporter:** {reporter_name}")
-                        st.write(f"**Created:** {created_at}")
-            else:
-                st.info("No recent reports found.")
+                    with col1:
+                        st.write(f"**Title:** {report['title']}")
+                        st.write(f"**Description:** {report['description']}")
+                        st.write(f"**Location:** {report['location']}")
+                        if report['local_government']:
+                            st.write(f"**LGA:** {report['local_government']}")
+                        if report['road_name']:
+                            st.write(f"**Road:** {report['road_name']}")
+                        st.write(f"**Source:** {report['source_name']} ({report['source_type']})")
+                        if report['source_url']:
+                            st.write(f"**Source URL:** [{report['source_url']}]({report['source_url']})")
+                    
+                    with col2:
+                        st.write(f"**Severity:** {report['severity'].title()}")
+                        st.write(f"**User Confirmations:** {report['user_confirmations']}")
+                        st.write(f"**Status:** {report['status']}")
+                        st.write(f"**Reported:** {report['created_at'][:16]}")
+                        
+                        # Action buttons
+                        col_btn1, col_btn2, col_btn3 = st.columns(3)
+                        
+                        with col_btn1:
+                            if st.button("✅ Confirm", key=f"confirm_{report['id']}"):
+                                user_id = st.session_state.get('user_id', 1)
+                                user_type = st.session_state.get('role', 'user')
+                                success = enhanced_reports_system.verify_report(
+                                    report['id'], user_id, user_type, 'confirm'
+                                )
+                                if success:
+                                    st.success("Report confirmed! Thank you for your contribution.")
+                                    st.rerun()
+                        
+                        with col_btn2:
+                            if st.button("❌ Dispute", key=f"dispute_{report['id']}"):
+                                user_id = st.session_state.get('user_id', 1)
+                                user_type = st.session_state.get('role', 'user')
+                                success = enhanced_reports_system.verify_report(
+                                    report['id'], user_id, user_type, 'dispute'
+                                )
+                                if success:
+                                    st.warning("Report disputed. This will be reviewed.")
+                                    st.rerun()
+                        
+                        with col_btn3:
+                            if st.button("✅ Resolved", key=f"resolved_{report['id']}"):
+                                user_id = st.session_state.get('user_id', 1)
+                                user_type = st.session_state.get('role', 'user')
+                                success = enhanced_reports_system.verify_report(
+                                    report['id'], user_id, user_type, 'resolve'
+                                )
+                                if success:
+                                    st.success("Marked as resolved. Thank you for the update!")
+                                    st.rerun()
     
     with tab2:
-        st.subheader("🛣️ Road Condition Reports (Last 3 Months)")
+        st.subheader("📰 News & Media Reports")
         
-        # Filters for road conditions
-        col1, col2 = st.columns(2)
+        # Get news media reports
+        news_reports = enhanced_reports_system.get_reports(
+            source_type='news_media',
+            hours=24
+        )
         
-        with col1:
-            if ROADS_DB_AVAILABLE:
-                states = ["All States"] + nigerian_roads_db.get_states()
-                condition_state_filter = st.selectbox("Filter by State", states, key="condition_state")
-            else:
-                condition_state_filter = "All States"
-        
-        with col2:
-            condition_types = ["All Conditions", "Good", "Fair", "Poor", "Critical"]
-            condition_filter = st.selectbox("Filter by Condition", condition_types)
-        
-        # Get road condition reports
-        if ROADS_DB_AVAILABLE:
-            road_conditions = nigerian_roads_db.get_road_conditions(months=3)
-            
-            # Apply filters
-            if condition_state_filter != "All States":
-                road_conditions = [c for c in road_conditions if c.get('state') == condition_state_filter]
-            
-            if condition_filter != "All Conditions":
-                road_conditions = [c for c in road_conditions if c.get('condition') == condition_filter]
-            
-            if road_conditions:
-                st.success(f"Found {len(road_conditions)} road condition reports in the last 3 months")
-                
-                for condition in road_conditions:
-                    with st.expander(f"🛣️ {condition.get('road_name', 'Unknown Road')} - {condition.get('condition', 'Unknown')}"):
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            st.write(f"**Road:** {condition.get('road_name', 'Unknown')}")
-                            st.write(f"**Condition:** {condition.get('condition', 'Unknown')}")
-                            st.write(f"**Description:** {condition.get('description', 'No description')}")
-                            st.write(f"**Reported:** {condition.get('reported_at', 'Unknown')}")
-                        
-                        with col2:
-                            st.write(f"**State:** {condition.get('state', 'Unknown')}")
-                            st.write(f"**LGA:** {condition.get('lga', 'Unknown')}")
-                            st.write(f"**Length:** {condition.get('length_km', 'Unknown')} km")
-                            
-                            # Action buttons
-                            if st.button("✅ Confirm", key=f"confirm_cond_{condition.get('id')}"):
-                                st.success("Condition confirmed!")
-                            
-                            if st.button("❌ False Report", key=f"false_cond_{condition.get('id')}"):
-                                st.error("Marked as false report!")
-                            
-                            if st.button("🔧 Resolved", key=f"resolve_cond_{condition.get('id')}"):
-                                st.info("Marked as resolved!")
-            else:
-                st.info("No road condition reports found in the last 3 months.")
+        if not news_reports:
+            st.info("📭 No news media reports found.")
         else:
-            st.info("Nigerian roads database not available.")
+            st.success(f"📊 Found {len(news_reports)} news media reports")
+            
+            for report in news_reports:
+                with st.expander(f"📰 {report['title']} - {report['state']}"):
+                    st.write(f"**Source:** {report['source_name']}")
+                    st.write(f"**Description:** {report['description']}")
+                    st.write(f"**Location:** {report['location']}")
+                    st.write(f"**Severity:** {report['severity'].title()}")
+                    st.write(f"**Published:** {report['created_at'][:16]}")
+                    if report['source_url']:
+                        st.write(f"**Read More:** [{report['source_url']}]({report['source_url']})")
     
     with tab3:
-        st.subheader("📊 Analytics Dashboard")
+        st.subheader("🏛️ Government Alerts & Advisories")
         
-        if ROADS_DB_AVAILABLE:
-            # Get comprehensive statistics
-            stats = nigerian_roads_db.get_road_statistics()
+        # Get government reports
+        gov_reports = enhanced_reports_system.get_reports(
+            source_type='government',
+            hours=24
+        )
+        
+        if not gov_reports:
+            st.info("📭 No government alerts found.")
+        else:
+            st.success(f"📊 Found {len(gov_reports)} government alerts")
+            
+            for report in gov_reports:
+                with st.expander(f"🏛️ {report['title']} - {report['state']}"):
+                    st.write(f"**Agency:** {report['source_name']}")
+                    st.write(f"**Description:** {report['description']}")
+                    st.write(f"**Location:** {report['location']}")
+                    if report['local_government']:
+                        st.write(f"**LGA:** {report['local_government']}")
+                    if report['road_name']:
+                        st.write(f"**Road:** {report['road_name']}")
+                    st.write(f"**Severity:** {report['severity'].title()}")
+                    st.write(f"**Issued:** {report['created_at'][:16]}")
+                    if report['source_url']:
+                        st.write(f"**Official Link:** [{report['source_url']}]({report['source_url']})")
+    
+    with tab4:
+        st.subheader("📊 Enhanced Report Analytics")
+        
+        if ENHANCED_REPORTS_AVAILABLE:
+            stats = enhanced_reports_system.get_report_statistics()
             
             # Key metrics
             col1, col2, col3, col4 = st.columns(4)
-            
             with col1:
-                st.metric("Total Risks (24h)", stats.get('total_risks', 0))
+                st.metric("Total Reports (24h)", stats.get('verification_stats', {}).get('total', 0))
             with col2:
-                st.metric("Total Conditions (3m)", stats.get('total_conditions', 0))
+                st.metric("Verified Reports", stats.get('verification_stats', {}).get('verified', 0))
             with col3:
-                st.metric("Active States", stats.get('active_states', 0))
+                st.metric("Admin Verified", stats.get('verification_stats', {}).get('admin_verified', 0))
             with col4:
-                st.metric("Major Roads", stats.get('major_roads', 0))
+                st.metric("Active Sources", len(stats.get('by_source_24h', {})))
             
-            # Risk type distribution
-            st.subheader("Risk Type Distribution")
-            risk_distribution = stats.get('risk_distribution', {})
-            if risk_distribution:
-                for risk_type, count in risk_distribution.items():
-                    st.write(f"• **{risk_type}:** {count} reports")
+            # Reports by source type
+            if stats.get('by_source_24h'):
+                st.subheader("Reports by Source Type (24h)")
+                for source_type, count in stats['by_source_24h'].items():
+                    source_icon = {
+                        'user': '👤',
+                        'news_media': '📰',
+                        'government': '🏛️',
+                        'social_media': '📱'
+                    }.get(source_type, '📄')
+                    st.write(f"{source_icon} **{source_type.title()}:** {count} reports")
+                    st.progress(min(count / max(stats['by_source_24h'].values()), 1.0))
             
-            # Top states with most reports
-            st.subheader("Top States by Reports")
-            top_states = stats.get('top_states', [])
-            if top_states:
-                for i, (state, count) in enumerate(top_states[:5], 1):
-                    st.write(f"{i}. **{state}:** {count} reports")
+            # Reports by state
+            if stats.get('by_state_24h'):
+                st.subheader("Reports by State (24h)")
+                for state, count in stats['by_state_24h'].items():
+                    st.write(f"**{state}:** {count} reports")
+            
+            # Security features reminder
+            st.markdown("### 🔒 Enhanced Security Features")
+            st.success("✅ Multi-source verification system")
+            st.success("✅ Real-time live report capture")
+            st.success("✅ User and admin verification tracking")
+            st.success("✅ Source credibility assessment")
+            st.success("✅ Automated report categorization")
+            st.success("✅ Enhanced data validation")
             
             # Road condition summary
             st.subheader("Road Condition Summary")

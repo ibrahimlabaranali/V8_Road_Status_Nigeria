@@ -12,6 +12,7 @@ import re
 import json
 import os
 import time
+import secrets
 from datetime import datetime, timedelta
 import base64
 import io
@@ -2538,7 +2539,7 @@ def show_view_reports():
                         st.write(f"**Reported:** {report['created_at'][:16]}")
                         
                         # Action buttons
-                        col_btn1, col_btn2, col_btn3 = st.columns(3)
+                        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
                         
                         with col_btn1:
                             if st.button("✅ Confirm", key=f"confirm_{report['id']}"):
@@ -2572,6 +2573,42 @@ def show_view_reports():
                                 if success:
                                     st.success("Marked as resolved. Thank you for the update!")
                                     st.rerun()
+                        
+                        # Admin-only False Report button
+                        with col_btn4:
+                            if st.session_state.get('user', {}).get('role') == 'Admin':
+                                if st.button("🚫 False Report", key=f"false_report_{report['id']}", type="secondary"):
+                                    # Show confirmation dialog
+                                    st.warning("⚠️ Are you sure you want to mark this as a false report?")
+                                    reason = st.text_area("Reason for marking as false report (optional):", 
+                                                        key=f"false_reason_{report['id']}", 
+                                                        placeholder="Explain why this report is false...")
+                                    
+                                    col_confirm1, col_confirm2 = st.columns(2)
+                                    with col_confirm1:
+                                        if st.button("✅ Confirm False Report", key=f"confirm_false_{report['id']}", type="primary"):
+                                            admin_id = st.session_state.get('user', {}).get('id', 1)
+                                            success = enhanced_reports_system.mark_false_report(
+                                                report['id'], admin_id, reason
+                                            )
+                                            if success:
+                                                st.error("🚫 Report marked as false by admin.")
+                                                # Log admin action
+                                                log_admin_action(
+                                                    admin_id, 
+                                                    st.session_state.get('user', {}).get('full_name', 'Admin'),
+                                                    "marked_false_report", 
+                                                    "report", 
+                                                    report['id'], 
+                                                    f"Reason: {reason}"
+                                                )
+                                                st.rerun()
+                                            else:
+                                                st.error("❌ Failed to mark report as false.")
+                                    
+                                    with col_confirm2:
+                                        if st.button("❌ Cancel", key=f"cancel_false_{report['id']}"):
+                                            st.rerun()
     
     with tab2:
         st.subheader("📰 News & Media Reports")
@@ -2589,13 +2626,51 @@ def show_view_reports():
             
             for report in news_reports:
                 with st.expander(f"📰 {report['title']} - {report['state']}"):
-                    st.write(f"**Source:** {report['source_name']}")
-                    st.write(f"**Description:** {report['description']}")
-                    st.write(f"**Location:** {report['location']}")
-                    st.write(f"**Severity:** {report['severity'].title()}")
-                    st.write(f"**Published:** {report['created_at'][:16]}")
-                    if report['source_url']:
-                        st.write(f"**Read More:** [{report['source_url']}]({report['source_url']})")
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Source:** {report['source_name']}")
+                        st.write(f"**Description:** {report['description']}")
+                        st.write(f"**Location:** {report['location']}")
+                        st.write(f"**Severity:** {report['severity'].title()}")
+                        st.write(f"**Published:** {report['created_at'][:16]}")
+                        if report['source_url']:
+                            st.write(f"**Read More:** [{report['source_url']}]({report['source_url']})")
+                    
+                    with col2:
+                        # Admin-only False Report button for news media
+                        if st.session_state.get('user', {}).get('role') == 'Admin':
+                            if st.button("🚫 False Report", key=f"false_news_{report['id']}", type="secondary"):
+                                st.warning("⚠️ Are you sure you want to mark this news report as false?")
+                                reason = st.text_area("Reason for marking as false report (optional):", 
+                                                    key=f"false_news_reason_{report['id']}", 
+                                                    placeholder="Explain why this news report is false...")
+                                
+                                col_confirm1, col_confirm2 = st.columns(2)
+                                with col_confirm1:
+                                    if st.button("✅ Confirm False Report", key=f"confirm_false_news_{report['id']}", type="primary"):
+                                        admin_id = st.session_state.get('user', {}).get('id', 1)
+                                        success = enhanced_reports_system.mark_false_report(
+                                            report['id'], admin_id, reason
+                                        )
+                                        if success:
+                                            st.error("🚫 News report marked as false by admin.")
+                                            # Log admin action
+                                            log_admin_action(
+                                                admin_id, 
+                                                st.session_state.get('user', {}).get('full_name', 'Admin'),
+                                                "marked_false_news_report", 
+                                                "report", 
+                                                report['id'], 
+                                                f"Reason: {reason}"
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Failed to mark news report as false.")
+                                
+                                with col_confirm2:
+                                    if st.button("❌ Cancel", key=f"cancel_false_news_{report['id']}"):
+                                        st.rerun()
     
     with tab3:
         st.subheader("🏛️ Government Alerts & Advisories")
@@ -2613,17 +2688,55 @@ def show_view_reports():
             
             for report in gov_reports:
                 with st.expander(f"🏛️ {report['title']} - {report['state']}"):
-                    st.write(f"**Agency:** {report['source_name']}")
-                    st.write(f"**Description:** {report['description']}")
-                    st.write(f"**Location:** {report['location']}")
-                    if report['local_government']:
-                        st.write(f"**LGA:** {report['local_government']}")
-                    if report['road_name']:
-                        st.write(f"**Road:** {report['road_name']}")
-                    st.write(f"**Severity:** {report['severity'].title()}")
-                    st.write(f"**Issued:** {report['created_at'][:16]}")
-                    if report['source_url']:
-                        st.write(f"**Official Link:** [{report['source_url']}]({report['source_url']})")
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Agency:** {report['source_name']}")
+                        st.write(f"**Description:** {report['description']}")
+                        st.write(f"**Location:** {report['location']}")
+                        if report['local_government']:
+                            st.write(f"**LGA:** {report['local_government']}")
+                        if report['road_name']:
+                            st.write(f"**Road:** {report['road_name']}")
+                        st.write(f"**Severity:** {report['severity'].title()}")
+                        st.write(f"**Issued:** {report['created_at'][:16]}")
+                        if report['source_url']:
+                            st.write(f"**Official Link:** [{report['source_url']}]({report['source_url']})")
+                    
+                    with col2:
+                        # Admin-only False Report button for government alerts
+                        if st.session_state.get('user', {}).get('role') == 'Admin':
+                            if st.button("🚫 False Report", key=f"false_gov_{report['id']}", type="secondary"):
+                                st.warning("⚠️ Are you sure you want to mark this government alert as false?")
+                                reason = st.text_area("Reason for marking as false report (optional):", 
+                                                    key=f"false_gov_reason_{report['id']}", 
+                                                    placeholder="Explain why this government alert is false...")
+                                
+                                col_confirm1, col_confirm2 = st.columns(2)
+                                with col_confirm1:
+                                    if st.button("✅ Confirm False Report", key=f"confirm_false_gov_{report['id']}", type="primary"):
+                                        admin_id = st.session_state.get('user', {}).get('id', 1)
+                                        success = enhanced_reports_system.mark_false_report(
+                                            report['id'], admin_id, reason
+                                        )
+                                        if success:
+                                            st.error("🚫 Government alert marked as false by admin.")
+                                            # Log admin action
+                                            log_admin_action(
+                                                admin_id, 
+                                                st.session_state.get('user', {}).get('full_name', 'Admin'),
+                                                "marked_false_gov_report", 
+                                                "report", 
+                                                report['id'], 
+                                                f"Reason: {reason}"
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Failed to mark government alert as false.")
+                                
+                                with col_confirm2:
+                                    if st.button("❌ Cancel", key=f"cancel_false_gov_{report['id']}"):
+                                        st.rerun()
     
     with tab4:
         st.subheader("📊 Enhanced Report Analytics")
@@ -3171,16 +3284,16 @@ def show_admin_dashboard():
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Total Reports", stats.get('total_reports', 0))
+            st.metric("Total Reports", stats.get('total', 0))
         
         with col2:
-            st.metric("Pending Reports", stats.get('pending_reports', 0))
+            st.metric("Pending Reports", stats.get('pending', 0))
         
         with col3:
-            st.metric("Verified Reports", stats.get('verified_reports', 0))
+            st.metric("Verified Reports", stats.get('verified', 0))
         
         with col4:
-            st.metric("Flagged as Fake", stats.get('false_reports', 0))
+            st.metric("Flagged as Fake", stats.get('false', 0))
         
         # Recent activity
         st.subheader("📈 Recent Activity (Last 24 Hours)")

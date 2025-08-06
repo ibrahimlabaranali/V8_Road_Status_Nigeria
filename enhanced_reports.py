@@ -230,6 +230,12 @@ class EnhancedReportSystem:
                     SET status = 'resolved'
                     WHERE id = ?
                 ''', (report_id,))
+            elif verification_type == 'false_report':
+                cursor.execute('''
+                    UPDATE enhanced_reports 
+                    SET status = 'false_report', admin_verified = TRUE, verified_by_admin_id = ?, verification_date = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (user_id, report_id))
             
             # If admin verifies, mark as admin_verified
             if user_type == 'admin' and verification_type == 'confirm':
@@ -244,6 +250,33 @@ class EnhancedReportSystem:
             return True
         except Exception as e:
             print(f"Error verifying report: {e}")
+            return False
+    
+    def mark_false_report(self, report_id: int, admin_id: int, reason: str = "") -> bool:
+        """Mark a report as false (admin only)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Add verification record for false report
+            cursor.execute('''
+                INSERT INTO report_verifications (
+                    report_id, user_id, user_type, verification_type, comment
+                ) VALUES (?, ?, ?, ?, ?)
+            ''', (report_id, admin_id, 'admin', 'false_report', reason))
+            
+            # Update report status to false_report
+            cursor.execute('''
+                UPDATE enhanced_reports 
+                SET status = 'false_report', admin_verified = TRUE, verified_by_admin_id = ?, verification_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (admin_id, report_id))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error marking false report: {e}")
             return False
     
     def get_reports(self, source_type: str = None, state: str = None, 

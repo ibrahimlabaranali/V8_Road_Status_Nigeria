@@ -288,6 +288,20 @@ def init_database():
             )
         ''')
         
+        # Password resets table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_type TEXT NOT NULL,
+                reset_token TEXT UNIQUE NOT NULL,
+                expiry_time TIMESTAMP NOT NULL,
+                used BOOLEAN DEFAULT 0,
+                used_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Login attempts tracking table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS login_attempts (
@@ -1406,7 +1420,7 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Login", "Admin Login", "Register", "About"]
+            ["Login", "Admin Login", "Register", "Reset Password", "About"]
         )
         
         if page == "Login":
@@ -1415,94 +1429,274 @@ def main():
             show_admin_login_page()
         elif page == "Register":
             show_registration_page()
+        elif page == "Reset Password":
+            show_reset_password()
         elif page == "About":
             show_about_page()
 
 def show_login_page():
     st.header("🔐 User Login")
     
-    # Show login attempt status
-    if st.session_state.login_attempts > 0:
-        remaining_attempts = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
-        if remaining_attempts > 0:
-            st.warning(f"⚠️ {remaining_attempts} login attempts remaining")
-        else:
-            lockout_duration = SECURITY_CONFIG['lockout_duration_minutes']
-            st.error(f"🚫 Account temporarily locked due to too many failed attempts. Please wait {lockout_duration} minutes.")
-            return
+    # Create tabs for login and forgot password
+    tab1, tab2 = st.tabs(["🔐 Login", "🔑 Forgot Password"])
     
-    with st.form("login_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            identifier = st.text_input(
-                "Email or Phone Number", 
-                placeholder="Enter your email or phone",
-                help="Enter your registered email address or phone number"
-            )
-        
-        with col2:
-            password = st.text_input(
-                "Password", 
-                type="password", 
-                placeholder="Enter your password",
-                help="Enter your account password"
-            )
-        
-        # Password strength indicator
-        if password:
-            is_strong, strength_msg = validate_password_strength(password)
-            if is_strong:
-                st.success("✅ Password strength: Good")
+    with tab1:
+        # Show login attempt status
+        if st.session_state.login_attempts > 0:
+            remaining_attempts = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+            if remaining_attempts > 0:
+                st.warning(f"⚠️ {remaining_attempts} login attempts remaining")
             else:
-                st.warning(f"⚠️ {strength_msg}")
+                lockout_duration = SECURITY_CONFIG['lockout_duration_minutes']
+                st.error(f"🚫 Account temporarily locked due to too many failed attempts. Please wait {lockout_duration} minutes.")
+                return
         
-        submit = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
+        with st.form("login_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                identifier = st.text_input(
+                    "Email or Phone Number", 
+                    placeholder="Enter your email or phone",
+                    help="Enter your registered email address or phone number"
+                )
+            
+            with col2:
+                password = st.text_input(
+                    "Password", 
+                    type="password", 
+                    placeholder="Enter your password",
+                    help="Enter your account password"
+                )
+            
+            # Password strength indicator
+            if password:
+                is_strong, strength_msg = validate_password_strength(password)
+                if is_strong:
+                    st.success("✅ Password strength: Good")
+                else:
+                    st.warning(f"⚠️ {strength_msg}")
+            
+            submit = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
+            
+            if submit:
+                if not identifier or not password:
+                    st.error("❌ Please fill in all fields")
+                    return
+                
+                # Show loading
+                with st.spinner("🔐 Authenticating..."):
+                    time.sleep(1)  # Simulate authentication delay
+                    success, user_data, message = authenticate_user(identifier, password)
+                
+                if success:
+                    st.success(f"✅ {message}")
+                    st.balloons()
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"❌ {message}")
+                    
+                    # Show remaining attempts
+                    if st.session_state.login_attempts > 0:
+                        remaining = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
+                        if remaining > 0:
+                            st.warning(f"⚠️ {remaining} login attempts remaining")
+                        else:
+                            lockout_duration = SECURITY_CONFIG['lockout_duration_minutes']
+                            st.error(f"🚫 Account temporarily locked due to too many failed attempts. Please wait {lockout_duration} minutes.")
+    
+    with tab2:
+        show_forgot_password()
+
+def show_forgot_password():
+    """Show forgot password form"""
+    st.subheader("🔑 Reset Your Password")
+    st.info("Enter your email or phone number to receive a reset link.")
+    
+    with st.form("forgot_password_form"):
+        identifier = st.text_input("Email or Phone Number", placeholder="Enter your email or phone")
+        user_type = st.selectbox("Account Type", ["User", "Admin"])
+        
+        submit = st.form_submit_button("Send Reset Link", type="primary")
         
         if submit:
-            if not identifier or not password:
-                st.error("❌ Please fill in all fields")
+            if not identifier:
+                st.error("❌ Please enter your email or phone number")
                 return
             
             # Show loading
-            with st.spinner("🔐 Authenticating..."):
-                time.sleep(1)  # Simulate authentication delay
-                success, user_data, message = authenticate_user(identifier, password)
+            with st.spinner("🔑 Processing reset request..."):
+                success, message = initiate_password_reset(identifier, user_type.lower())
             
             if success:
                 st.success(f"✅ {message}")
-                st.balloons()
-                time.sleep(1)
+                st.info("Please check your email or phone for reset instructions.")
+            else:
+                st.error(f"❌ {message}")
+
+def show_reset_password():
+    """Show password reset form"""
+    st.subheader("🔑 Set New Password")
+    st.info("Enter your new password below.")
+    
+    with st.form("reset_password_form"):
+        token = st.text_input("Reset Token", placeholder="Enter the token from your email/phone")
+        new_password = st.text_input("New Password", type="password", placeholder="Enter new password")
+        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm new password")
+        
+        submit = st.form_submit_button("Reset Password", type="primary")
+        
+        if submit:
+            if not all([token, new_password, confirm_password]):
+                st.error("❌ Please fill in all fields")
+                return
+            
+            if new_password != confirm_password:
+                st.error("❌ Passwords do not match")
+                return
+            
+            # Show loading
+            with st.spinner("🔑 Resetting password..."):
+                success, message = reset_password(token, new_password)
+            
+            if success:
+                st.success(f"✅ {message}")
+                st.info("You can now login with your new password.")
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(f"❌ {message}")
-                
-                # Show remaining attempts
-                if st.session_state.login_attempts > 0:
-                    remaining = SECURITY_CONFIG['max_login_attempts'] - st.session_state.login_attempts
-                    if remaining > 0:
-                        st.warning(f"⚠️ {remaining} login attempts remaining")
-                    else:
-                        lockout_duration = SECURITY_CONFIG['lockout_duration_minutes']
-                        st.error(f"🚫 Account temporarily locked due to too many failed attempts. Please wait {lockout_duration} minutes.")
-    
-    # Help section
-    with st.expander("❓ Need Help?", expanded=False):
-        st.markdown("""
-        **Forgot Password?**
-        - Contact your system administrator
-        - Use the admin login if you have admin credentials
+
+def initiate_password_reset(identifier: str, user_type: str = "user") -> tuple[bool, str]:
+    """Initiate password reset process"""
+    try:
+        # Validate input
+        if not identifier or len(identifier.strip()) < 3:
+            return False, "Invalid identifier provided"
         
-        **Trouble Logging In?**
-        - Ensure your email/phone is correctly entered
-        - Check that your password meets the strength requirements
-        - Make sure your account hasn't been locked due to too many failed attempts
+        # Check if user exists
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
         
-        **Security Tips:**
-        - Use a strong password with uppercase, lowercase, numbers, and special characters
-        - Don't share your login credentials
-        - Log out when using shared computers
-        """)
+        # Check in appropriate table
+        if user_type == "admin":
+            cursor.execute('''
+                SELECT id, full_name, email, phone_number 
+                FROM admin_users 
+                WHERE email = ? OR phone_number = ?
+            ''', (identifier, identifier))
+        else:
+            cursor.execute('''
+                SELECT id, full_name, email, phone_number 
+                FROM users 
+                WHERE email = ? OR phone_number = ?
+            ''', (identifier, identifier))
+        
+        user = cursor.fetchone()
+        
+        if not user:
+            conn.close()
+            return False, "No account found with this email or phone number"
+        
+        user_id, full_name, email, phone = user
+        
+        # Generate reset token
+        reset_token = secrets.token_urlsafe(32)
+        expiry_time = datetime.now() + timedelta(hours=24)  # 24 hours expiry
+        
+        # Store reset token
+        cursor.execute('''
+            INSERT OR REPLACE INTO password_resets 
+            (user_id, user_type, reset_token, expiry_time, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, user_type, reset_token, expiry_time, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log the reset request
+        log_security_event("PASSWORD_RESET_REQUESTED", f"User {user_id} requested password reset", "INFO")
+        
+        # In a real application, you would send email/SMS here
+        # For demo purposes, we'll show the token
+        if user_type == "admin":
+            st.session_state.admin_reset_token = reset_token
+        else:
+            st.session_state.user_reset_token = reset_token
+        
+        return True, f"Reset link sent to {identifier}. Check your email/phone for instructions."
+        
+    except Exception as e:
+        log_security_event("PASSWORD_RESET_ERROR", f"Error in password reset: {str(e)}", "ERROR")
+        return False, "An error occurred while processing your request"
+
+def reset_password(token: str, new_password: str) -> tuple[bool, str]:
+    """Reset password using token"""
+    try:
+        # Validate password strength
+        is_strong, strength_msg = validate_password_strength(new_password)
+        if not is_strong:
+            return False, f"Password validation failed: {strength_msg}"
+        
+        # Check if token exists and is valid
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT user_id, user_type, expiry_time 
+            FROM password_resets 
+            WHERE reset_token = ? AND used = 0
+        ''', (token,))
+        
+        reset_record = cursor.fetchone()
+        
+        if not reset_record:
+            conn.close()
+            return False, "Invalid or expired reset token"
+        
+        user_id, user_type, expiry_time = reset_record
+        
+        # Check if token has expired
+        if datetime.now() > datetime.fromisoformat(expiry_time):
+            conn.close()
+            return False, "Reset token has expired"
+        
+        # Hash new password
+        hashed_password = hash_password(new_password)
+        
+        # Update password in appropriate table
+        if user_type == "admin":
+            cursor.execute('''
+                UPDATE admin_users 
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (hashed_password, datetime.now(), user_id))
+        else:
+            cursor.execute('''
+                UPDATE users 
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (hashed_password, datetime.now(), user_id))
+        
+        # Mark token as used
+        cursor.execute('''
+            UPDATE password_resets 
+            SET used = 1, used_at = ?
+            WHERE reset_token = ?
+        ''', (datetime.now(), token))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log the password reset
+        log_security_event("PASSWORD_RESET_COMPLETED", f"User {user_id} reset password successfully", "INFO")
+        
+        return True, "Password reset successfully"
+        
+    except Exception as e:
+        log_security_event("PASSWORD_RESET_ERROR", f"Error in password reset: {str(e)}", "ERROR")
+        return False, "An error occurred while resetting your password"
 
 def show_admin_login_page():
     st.header("🔐 Admin Login")

@@ -114,6 +114,20 @@ def init_database():
             )
         ''')
         
+        # Password resets table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_type TEXT NOT NULL,
+                reset_token TEXT UNIQUE NOT NULL,
+                expiry_time TIMESTAMP NOT NULL,
+                used BOOLEAN DEFAULT 0,
+                used_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         # Risk reports table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS risk_reports (
@@ -575,51 +589,261 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Login", "Register", "About"]
+            ["Login", "Register", "Reset Password", "About"]
         )
         
         if page == "Login":
             show_login_page_secure()
         elif page == "Register":
             show_registration_page_secure()
+        elif page == "Reset Password":
+            show_reset_password_secure()
         elif page == "About":
             show_about_page()
 
 def show_login_page_secure():
     st.header("🔐 Secure Login")
     
-    with st.form("secure_login_form"):
+    # Create tabs for login and forgot password
+    tab1, tab2 = st.tabs(["🔐 Login", "🔑 Forgot Password"])
+    
+    with tab1:
+        with st.form("secure_login_form"):
+            identifier = st.text_input("Email or Phone Number", placeholder="Enter your email or phone")
+            password = st.text_input("Password", type="password", placeholder="Enter your password")
+            
+            # 2FA if available
+            if SECURITY_AVAILABLE and TOTP_AVAILABLE:
+                st.subheader("🔒 Two-Factor Authentication")
+                otp = st.text_input("Enter OTP (if enabled)", placeholder="6-digit code", max_chars=6)
+            else:
+                otp = None
+            
+            submit = st.form_submit_button("🔐 Login", type="primary")
+            
+            if submit:
+                if not identifier or not password:
+                    st.error("❌ Please fill in all required fields")
+                    return
+                
+                # Show loading
+                with st.spinner("🔐 Authenticating securely..."):
+                    time.sleep(1)  # Simulate authentication delay
+                    success, user_data, session_id = authenticate_user_secure(identifier, password)
+                
+                if success:
+                    # Store session ID
+                    st.session_state.session_id = session_id
+                    st.success(f"✅ Login successful!")
+                    st.balloons()
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"❌ {user_data}")  # user_data contains error message here
+    
+    with tab2:
+        show_forgot_password_secure()
+
+def show_forgot_password_secure():
+    """Show forgot password form"""
+    st.subheader("🔑 Reset Your Password")
+    st.info("Enter your email or phone number to receive a reset link.")
+    
+    with st.form("forgot_password_form"):
         identifier = st.text_input("Email or Phone Number", placeholder="Enter your email or phone")
-        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        user_type = st.selectbox("Account Type", ["User", "Admin"])
         
-        # 2FA if available
-        if SECURITY_AVAILABLE and TOTP_AVAILABLE:
-            st.subheader("🔒 Two-Factor Authentication")
-            otp = st.text_input("Enter OTP (if enabled)", placeholder="6-digit code", max_chars=6)
-        else:
-            otp = None
-        
-        submit = st.form_submit_button("🔐 Login", type="primary")
+        submit = st.form_submit_button("Send Reset Link", type="primary")
         
         if submit:
-            if not identifier or not password:
-                st.error("❌ Please fill in all required fields")
+            if not identifier:
+                st.error("❌ Please enter your email or phone number")
                 return
             
             # Show loading
-            with st.spinner("🔐 Authenticating securely..."):
-                time.sleep(1)  # Simulate authentication delay
-                success, user_data, session_id = authenticate_user_secure(identifier, password)
+            with st.spinner("🔑 Processing reset request..."):
+                success, message = initiate_password_reset_secure(identifier, user_type.lower())
             
             if success:
-                # Store session ID
-                st.session_state.session_id = session_id
-                st.success(f"✅ Login successful!")
-                st.balloons()
-                time.sleep(1)
+                st.success(f"✅ {message}")
+                st.info("Please check your email or phone for reset instructions.")
+            else:
+                st.error(f"❌ {message}")
+
+def show_reset_password_secure():
+    """Show password reset form"""
+    st.subheader("🔑 Set New Password")
+    st.info("Enter your new password below.")
+    
+    with st.form("reset_password_form"):
+        token = st.text_input("Reset Token", placeholder="Enter the token from your email/phone")
+        new_password = st.text_input("New Password", type="password", placeholder="Enter new password")
+        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm new password")
+        
+        submit = st.form_submit_button("Reset Password", type="primary")
+        
+        if submit:
+            if not all([token, new_password, confirm_password]):
+                st.error("❌ Please fill in all fields")
+                return
+            
+            if new_password != confirm_password:
+                st.error("❌ Passwords do not match")
+                return
+            
+            # Show loading
+            with st.spinner("🔑 Resetting password..."):
+                success, message = reset_password_secure(token, new_password)
+            
+            if success:
+                st.success(f"✅ {message}")
+                st.info("You can now login with your new password.")
+                time.sleep(2)
                 st.rerun()
             else:
-                st.error(f"❌ {user_data}")  # user_data contains error message here
+                st.error(f"❌ {message}")
+
+def initiate_password_reset_secure(identifier: str, user_type: str = "user") -> tuple[bool, str]:
+    """Initiate password reset process"""
+    try:
+        # Validate input
+        if not identifier or len(identifier.strip()) < 3:
+            return False, "Invalid identifier provided"
+        
+        # Check if user exists
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Check in appropriate table
+        if user_type == "admin":
+            cursor.execute('''
+                SELECT id, full_name, email, phone_number 
+                FROM admin_users 
+                WHERE email = ? OR phone_number = ?
+            ''', (identifier, identifier))
+        else:
+            cursor.execute('''
+                SELECT id, full_name, email, phone_number 
+                FROM users 
+                WHERE email = ? OR phone_number = ?
+            ''', (identifier, identifier))
+        
+        user = cursor.fetchone()
+        
+        if not user:
+            conn.close()
+            return False, "No account found with this email or phone number"
+        
+        user_id, full_name, email, phone = user
+        
+        # Generate reset token
+        reset_token = secrets.token_urlsafe(32)
+        expiry_time = datetime.now() + timedelta(hours=24)  # 24 hours expiry
+        
+        # Store reset token
+        cursor.execute('''
+            INSERT OR REPLACE INTO password_resets 
+            (user_id, user_type, reset_token, expiry_time, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, user_type, reset_token, expiry_time, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log the reset request
+        log_security_event("PASSWORD_RESET_REQUESTED", f"User {user_id} requested password reset", "INFO")
+        
+        # In a real application, you would send email/SMS here
+        # For demo purposes, we'll show the token
+        if user_type == "admin":
+            st.session_state.admin_reset_token = reset_token
+        else:
+            st.session_state.user_reset_token = reset_token
+        
+        return True, f"Reset link sent to {identifier}. Check your email/phone for instructions."
+        
+    except Exception as e:
+        log_security_event("PASSWORD_RESET_ERROR", f"Error in password reset: {str(e)}", "ERROR")
+        return False, "An error occurred while processing your request"
+
+def reset_password_secure(token: str, new_password: str) -> tuple[bool, str]:
+    """Reset password using token"""
+    try:
+        # Validate password strength
+        if len(new_password) < 8:
+            return False, "Password must be at least 8 characters long"
+        
+        # Check if token exists and is valid
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT user_id, user_type, expiry_time 
+            FROM password_resets 
+            WHERE reset_token = ? AND used = 0
+        ''', (token,))
+        
+        reset_record = cursor.fetchone()
+        
+        if not reset_record:
+            conn.close()
+            return False, "Invalid or expired reset token"
+        
+        user_id, user_type, expiry_time = reset_record
+        
+        # Check if token has expired
+        if datetime.now() > datetime.fromisoformat(expiry_time):
+            conn.close()
+            return False, "Reset token has expired"
+        
+        # Hash new password
+        if SECURITY_AVAILABLE:
+            hashed_password = password_manager.hash_password(new_password)
+        else:
+            hashed_password = hash_password_fallback(new_password)
+        
+        # Update password in appropriate table
+        if user_type == "admin":
+            cursor.execute('''
+                UPDATE admin_users 
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (hashed_password, datetime.now(), user_id))
+        else:
+            cursor.execute('''
+                UPDATE users 
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (hashed_password, datetime.now(), user_id))
+        
+        # Mark token as used
+        cursor.execute('''
+            UPDATE password_resets 
+            SET used = 1, used_at = ?
+            WHERE reset_token = ?
+        ''', (datetime.now(), token))
+        
+        conn.commit()
+        conn.close()
+        
+        # Log the password reset
+        log_security_event("PASSWORD_RESET_COMPLETED", f"User {user_id} reset password successfully", "INFO")
+        
+        return True, "Password reset successfully"
+        
+    except Exception as e:
+        log_security_event("PASSWORD_RESET_ERROR", f"Error in password reset: {str(e)}", "ERROR")
+        return False, "An error occurred while resetting your password"
+
+def hash_password_fallback(password: str) -> str:
+    """Fallback password hashing if security module not available"""
+    import hashlib
+    import secrets
+    
+    salt = secrets.token_hex(16)
+    hash_obj = hashlib.sha256()
+    hash_obj.update((password + salt).encode())
+    return f"{salt}${hash_obj.hexdigest()}"
 
 def show_registration_page_secure():
     st.header("📝 Secure Registration")

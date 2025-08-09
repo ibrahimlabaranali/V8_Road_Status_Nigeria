@@ -1,0 +1,37 @@
+# Mobile Backend API Dependencies
+# Core FastAPI framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Security and authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Database
+sqlite3  # Built-in with Python
+
+# Data validation
+pydantic==2.5.0
+email-validator==2.1.0
+
+# CORS and middleware
+python-cors==0.0.1
+
+# Logging and utilities
+python-dateutil==2.8.2
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Production deployment
+gunicorn==21.2.0
+
+# Additional dependencies for enhanced features
+aiofiles==23.2.1  # For async file operations
+python-magic==0.4.27  # For file type detection
+Pillow==10.1.0  # For image processing
+redis==5.0.1  # For rate limiting and caching (optional)
+celery==5.3.4  # For background tasks (optional) 

@@ -61,6 +61,80 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Auto-refresh configuration
+AUTO_REFRESH_CONFIG = {
+    'enabled': True,
+    'interval_seconds': 30,  # Auto-refresh every 30 seconds
+    'manual_refresh_enabled': True,
+    'show_refresh_status': True
+}
+
+def check_for_new_reports():
+    """Check if there are new reports since last check"""
+    if 'last_report_check' not in st.session_state:
+        st.session_state.last_report_check = datetime.now()
+        st.session_state.last_report_count = 0
+    
+    # Update last check time
+    st.session_state.last_report_check = datetime.now()
+    
+    # Get current report count
+    current_count = len(get_risk_reports())
+    
+    # Check if there are new reports
+    if current_count > st.session_state.last_report_count:
+        new_reports = current_count - st.session_state.last_report_count
+        st.session_state.last_report_count = current_count
+        return True, new_reports
+    
+    return False, 0
+
+def get_last_update_time():
+    """Get the time of last update check"""
+    if 'last_report_check' in st.session_state:
+        return st.session_state.last_report_check
+    return None
+
+def trigger_auto_refresh():
+    """Trigger auto-refresh when new reports are detected"""
+    if AUTO_REFRESH_CONFIG['enabled']:
+        has_new_reports, new_count = check_for_new_reports()
+        if has_new_reports:
+            # Show notification
+            st.success(f"🆕 {new_count} new report(s) detected! Auto-refreshing...")
+            
+            # Add to session state for persistent notification
+            if 'notifications' not in st.session_state:
+                st.session_state.notifications = []
+            
+            notification = {
+                'type': 'new_reports',
+                'message': f"{new_count} new report(s) detected",
+                'timestamp': datetime.now(),
+                'count': new_count
+            }
+            st.session_state.notifications.append(notification)
+            
+            # Auto-refresh after brief delay
+            time.sleep(2)
+            st.rerun()
+
+def show_notifications():
+    """Display notifications to users"""
+    if 'notifications' in st.session_state and st.session_state.notifications:
+        st.subheader("🔔 Recent Notifications")
+        
+        for i, notification in enumerate(st.session_state.notifications[-5:]):  # Show last 5
+            if notification['type'] == 'new_reports':
+                st.info(f"🆕 {notification['message']} at {notification['timestamp'].strftime('%H:%M:%S')}")
+        
+        # Clear old notifications (older than 1 hour)
+        current_time = datetime.now()
+        st.session_state.notifications = [
+            n for n in st.session_state.notifications 
+            if (current_time - n['timestamp']).total_seconds() < 3600
+        ]
+
 # Custom CSS for clean UI with improved accessibility
 st.markdown("""
 <style>
@@ -231,7 +305,7 @@ def init_database():
             )
         ''')
         
-        # Risk reports table
+        # Risk reports table - Added is_verified field for access control
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS risk_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,10 +324,18 @@ def init_database():
                 upvotes INTEGER DEFAULT 0,
                 advice TEXT,
                 risk_level TEXT DEFAULT 'medium',
+                is_verified BOOLEAN DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
+        
+        # Add is_verified column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE risk_reports ADD COLUMN is_verified BOOLEAN DEFAULT 0')
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         
         # Admin logs table
         cursor.execute('''
@@ -311,48 +393,11 @@ def init_database():
             )
         ''')
         
-        # Login attempts tracking table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS login_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                identifier TEXT NOT NULL,
-                user_ip TEXT,
-                success BOOLEAN DEFAULT FALSE,
-                attempt_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_agent TEXT
-            )
-        ''')
-        
-        # Account lockouts table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS account_lockouts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                identifier TEXT NOT NULL,
-                user_ip TEXT,
-                lockout_reason TEXT,
-                lockout_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                lockout_end TIMESTAMP,
-                is_active BOOLEAN DEFAULT TRUE
-            )
-        ''')
-        
-        # Rate limiting table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rate_limits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                identifier TEXT NOT NULL,
-                user_ip TEXT,
-                request_count INTEGER DEFAULT 1,
-                window_start TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                window_end TIMESTAMP
-            )
-        ''')
-        
         conn.commit()
         conn.close()
         return True
     except Exception as e:
-        st.error(f"Database initialization error: {str(e)}")
+        st.error(f"Database initialization error: {e}")
         return False
 
 # Security and utility functions
@@ -827,7 +872,8 @@ def get_risk_reports(user_id: int = None, status: str = None, source_type: str =
         
         query = '''
             SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
-                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified
             FROM risk_reports r
             JOIN users u ON r.user_id = u.id
         '''
@@ -852,6 +898,114 @@ def get_risk_reports(user_id: int = None, status: str = None, source_type: str =
         query += ' ORDER BY r.created_at DESC'
         
         cursor.execute(query, params)
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_public_reports(limit: int = 50) -> list:
+    """Get public reports that can be viewed by unregistered users"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get only social media and news reports for public access
+        # Unverified user reports are NOT included in public access for security
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.source_type IN ('social_media', 'news')
+            AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_verified_reports(limit: int = 50) -> list:
+    """Get verified reports that require user authentication"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get only verified reports
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.is_verified = 1 AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_social_media_reports(limit: int = 50) -> list:
+    """Get social media reports for public access"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get social media reports only
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.source_type = 'social_media'
+            AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_news_reports(limit: int = 50) -> list:
+    """Get news reports for public access"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get news reports only
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.source_type = 'news'
+            AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
         reports = cursor.fetchall()
         conn.close()
         
@@ -892,6 +1046,44 @@ def update_report_status(report_id: int, status: str) -> bool:
         cursor = conn.cursor()
         
         cursor.execute('UPDATE risk_reports SET status = ? WHERE id = ?', (status, report_id))
+        conn.commit()
+        conn.close()
+        
+        return True
+    except Exception:
+        return False
+
+def mark_report_as_verified(report_id: int, admin_id: int, admin_name: str) -> bool:
+    """Mark a report as verified by admin"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Update report verification status
+        cursor.execute('UPDATE risk_reports SET is_verified = 1 WHERE id = ?', (report_id,))
+        
+        # Log admin action
+        log_admin_action(admin_id, admin_name, "verify_report", "risk_report", report_id, "Report marked as verified")
+        
+        conn.commit()
+        conn.close()
+        
+        return True
+    except Exception:
+        return False
+
+def mark_report_as_unverified(report_id: int, admin_id: int, admin_name: str) -> bool:
+    """Mark a report as unverified by admin"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Update report verification status
+        cursor.execute('UPDATE risk_reports SET is_verified = 0 WHERE id = ?', (report_id,))
+        
+        # Log admin action
+        log_admin_action(admin_id, admin_name, "unverify_report", "risk_report", report_id, "Report marked as unverified")
+        
         conn.commit()
         conn.close()
         
@@ -1320,6 +1512,32 @@ if 'admin_user' not in st.session_state:
 def main():
     st.markdown('<div class="main-header"><h1>🛣️ Road Report Nigeria</h1><p>Enhanced Road Status System - Python 3.13 Compatible</p></div>', unsafe_allow_html=True)
     
+    # Show public access banner for non-authenticated users
+    if not st.session_state.get('authenticated'):
+        st.success("🎉 **Public Access Available!** Check road status without registration using the sidebar navigation.")
+    
+    # Auto-refresh functionality
+    if AUTO_REFRESH_CONFIG['enabled']:
+        # Check for new reports and trigger refresh if needed
+        trigger_auto_refresh()
+        
+        # Add auto-refresh meta tag
+        st.markdown(f"""
+        <meta http-equiv="refresh" content="{AUTO_REFRESH_CONFIG['interval_seconds']}">
+        """, unsafe_allow_html=True)
+        
+        # Show refresh status
+        if AUTO_REFRESH_CONFIG['show_refresh_status']:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.info(f"🔄 Auto-refresh enabled - Updates every {AUTO_REFRESH_CONFIG['interval_seconds']} seconds")
+            with col2:
+                if st.button("🔄 Manual Refresh", type="secondary", key="main_refresh"):
+                    st.rerun()
+        
+        # Show notifications
+        show_notifications()
+    
     # Check session timeout
     if check_session_timeout():
         if st.session_state.authenticated:
@@ -1424,15 +1642,39 @@ def main():
             st.success("✅ Successfully logged out!")
             st.rerun()
     else:
-        # User is not logged in
-        st.sidebar.info("🔐 Please log in to access the system")
+        # No user is logged in - show public access options
+        st.sidebar.info("🔓 Public Access - Limited Features Available")
+        st.sidebar.markdown("""
+        **Available for everyone:**
+        - 🛣️ **Check road status** (Primary feature)
+        - 📰 View social media reports
+        - 📰 View news reports
+        - 📖 Read about the system
+        
+        **Sign up for full access:**
+        - 📋 View verified reports
+        - ✍️ Submit reports
+        - 👍 Upvote and comment on reports
+        - 📊 Access detailed analytics
+        - 🔔 Get real-time notifications
+        """)
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Login", "Admin Login", "Register", "Reset Password", "About"]
+            ["Road Status Checker", "Public Reports", "Social Media Reports", "News Reports", "About", "Login", "Admin Login", "Register", "Reset Password"]
         )
         
-        if page == "Login":
+        if page == "Road Status Checker":
+            show_road_status_checker()
+        elif page == "Public Reports":
+            show_public_reports()
+        elif page == "Social Media Reports":
+            show_social_media_reports()
+        elif page == "News Reports":
+            show_news_reports()
+        elif page == "About":
+            show_about_page()
+        elif page == "Login":
             show_login_page()
         elif page == "Admin Login":
             show_admin_login_page()
@@ -1440,8 +1682,6 @@ def main():
             show_registration_page()
         elif page == "Reset Password":
             show_reset_password()
-        elif page == "About":
-            show_about_page()
 
 def show_login_page():
     st.header("🔐 User Login")
@@ -1906,13 +2146,23 @@ def show_dashboard():
     🚨 **ACCOUNT WARNING**: Users who submit false or misleading information may have their accounts removed.
     """)
     
-    # Import live data if needed
-    if st.button("🔄 Refresh Live Data", type="secondary"):
-        with st.spinner("Updating live data..."):
-            import_news_to_reports()
-            import_social_media_to_reports()
-        st.success("Live data updated!")
-        st.rerun()
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Live Data", type="secondary"):
+            with st.spinner("Updating live data..."):
+                import_news_to_reports()
+                import_social_media_to_reports()
+            st.success("Live data updated!")
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
     
     # Get recent reports (last 24 hours only)
     recent_reports = get_recent_reports(hours=24)
@@ -2214,6 +2464,10 @@ def show_submit_report():
                 if success:
                     st.success(message)
                     
+                    # Auto-refresh notification
+                    if AUTO_REFRESH_CONFIG['enabled']:
+                        st.info(f"🔄 Report submitted successfully! The app will automatically refresh in {AUTO_REFRESH_CONFIG['interval_seconds']} seconds to show the latest data.")
+                    
                     # AI Insights based on severity
                     st.subheader("🤖 AI Insights")
                     if severity == "Critical":
@@ -2430,14 +2684,24 @@ def show_view_reports():
     All reports are community-verified and monitored for accuracy.
     """)
     
-    # Capture live reports periodically
-    if st.button("🔄 Refresh Live Reports", type="primary"):
-        with st.spinner("🔄 Capturing live reports from external sources..."):
-            captured_reports = enhanced_reports_system.capture_live_reports()
-            if captured_reports:
-                st.success(f"✅ Captured {len(captured_reports)} new live reports!")
-            else:
-                st.info("📭 No new live reports captured.")
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Live Reports", type="primary"):
+            with st.spinner("🔄 Capturing live reports from external sources..."):
+                captured_reports = enhanced_reports_system.capture_live_reports()
+                if captured_reports:
+                    st.success(f"✅ Captured {len(captured_reports)} new live reports!")
+                else:
+                    st.info("📭 No new live reports captured.")
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
     
     # Enhanced tabbed interface
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -3198,6 +3462,374 @@ def show_user_management():
             
     except Exception:
         st.info("User management features would be implemented here")
+
+def show_public_reports():
+    """Display public reports for unregistered users"""
+    st.header("📰 Public Road Reports")
+    st.info("🔓 These reports are publicly available. Sign up to view verified reports and submit your own!")
+    
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Reports", type="secondary"):
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
+    
+    # Get public reports
+    public_reports = get_public_reports(100)
+    
+    if not public_reports:
+        st.warning("📭 No public reports available at the moment.")
+        return
+    
+    # Filter options
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        risk_type_filter = st.selectbox(
+            "Filter by Risk Type:",
+            ["All"] + list(set([report[1] for report in public_reports]))
+        )
+    
+    with col2:
+        source_filter = st.selectbox(
+            "Filter by Source:",
+            ["All", "social_media", "news"]
+        )
+    
+    with col3:
+        risk_level_filter = st.selectbox(
+            "Filter by Risk Level:",
+            ["All", "low", "medium", "high", "critical"]
+        )
+    
+    # Apply filters
+    filtered_reports = []
+    for report in public_reports:
+        if risk_type_filter != "All" and report[1] != risk_type_filter:
+            continue
+        if source_filter != "All" and report[9] != source_filter:
+            continue
+        if risk_level_filter != "All" and report[13] != risk_level_filter:
+            continue
+        filtered_reports.append(report)
+    
+    st.success(f"📊 Showing {len(filtered_reports)} public reports")
+    
+    # Display reports
+    for i, report in enumerate(filtered_reports):
+        report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, user_name, source_type, source_url, is_verified, risk_level = report
+        
+        # Create expandable container for each report
+        with st.expander(f"🚨 {risk_type.title()} - {location} ({risk_level.upper()})"):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown(f"**Description:** {description}")
+                st.markdown(f"**Location:** {location}")
+                st.markdown(f"**Reported by:** {user_name}")
+                st.markdown(f"**Source:** {source_type.replace('_', ' ').title()}")
+                st.markdown(f"**Status:** {status.title()}")
+                st.markdown(f"**Risk Level:** {risk_level.upper()}")
+                
+                if source_url:
+                    st.markdown(f"**Source URL:** [{source_url}]({source_url})")
+                
+                # Show verification status
+                if is_verified:
+                    st.success("✅ Verified Report")
+                else:
+                    st.info("🔍 Unverified Report")
+            
+            with col2:
+                # Show map if coordinates are available
+                if lat and lon:
+                    try:
+                        import folium
+                        from streamlit_folium import folium_static
+                        
+                        m = folium.Map(location=[lat, lon], zoom_start=15)
+                        folium.Marker(
+                            [lat, lon],
+                            popup=f"{risk_type}: {location}",
+                            icon=folium.Icon(color='red', icon='warning-sign')
+                        ).add_to(m)
+                        
+                        folium_static(m, width=300, height=200)
+                    except ImportError:
+                        st.info("📍 Coordinates: {lat}, {lon}")
+                
+                # Show time ago
+                time_ago = get_time_ago(created_at)
+                st.caption(f"📅 {time_ago}")
+                
+                # Show confirmations and upvotes
+                if confirmations > 0:
+                    st.info(f"✅ {confirmations} confirmations")
+        
+        # Add separator between reports
+        if i < len(filtered_reports) - 1:
+            st.markdown("---")
+    
+    # Call to action
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem; background-color: #f0f2f6; border-radius: 10px;'>
+        <h3>🚀 Want to see more?</h3>
+        <p>Sign up for a free account to:</p>
+        <ul style='text-align: left; display: inline-block;'>
+            <li>📋 View verified risk reports</li>
+            <li>✍️ Submit your own reports</li>
+            <li>👍 Upvote and comment on reports</li>
+            <li>📊 Access detailed analytics</li>
+            <li>🔔 Get real-time notifications</li>
+        </ul>
+        <br>
+        <p><strong>Join thousands of users making Nigerian roads safer!</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_social_media_reports():
+    """Display social media reports for public access"""
+    st.header("📱 Social Media Road Reports")
+    st.info("🔓 These reports are sourced from social media platforms and are publicly available.")
+    
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Reports", type="secondary"):
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
+    
+    # Get social media reports
+    social_reports = get_social_media_reports(100)
+    
+    if not social_reports:
+        st.warning("📭 No social media reports available at the moment.")
+        return
+    
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        risk_type_filter = st.selectbox(
+            "Filter by Risk Type:",
+            ["All"] + list(set([report[1] for report in social_reports]))
+        )
+    
+    with col2:
+        risk_level_filter = st.selectbox(
+            "Filter by Risk Level:",
+            ["All", "low", "medium", "high", "critical"]
+        )
+    
+    # Apply filters
+    filtered_reports = []
+    for report in social_reports:
+        if risk_type_filter != "All" and report[1] != risk_type_filter:
+            continue
+        if risk_level_filter != "All" and report[13] != risk_level_filter:
+            continue
+        filtered_reports.append(report)
+    
+    st.success(f"📊 Showing {len(filtered_reports)} social media reports")
+    
+    # Display reports
+    for i, report in enumerate(filtered_reports):
+        report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, user_name, source_type, source_url, is_verified, risk_level = report
+        
+        # Create expandable container for each report
+        with st.expander(f"📱 {risk_type.title()} - {location} ({risk_level.upper()})"):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown(f"**Description:** {description}")
+                st.markdown(f"**Location:** {location}")
+                st.markdown(f"**Reported by:** {user_name}")
+                st.markdown(f"**Source:** Social Media")
+                st.markdown(f"**Status:** {status.title()}")
+                st.markdown(f"**Risk Level:** {risk_level.upper()}")
+                
+                if source_url:
+                    st.markdown(f"**Source URL:** [{source_url}]({source_url})")
+            
+            with col2:
+                # Show map if coordinates are available
+                if lat and lon:
+                    try:
+                        import folium
+                        from streamlit_folium import folium_static
+                        
+                        m = folium.Map(location=[lat, lon], zoom_start=15)
+                        folium.Marker(
+                            [lat, lon],
+                            popup=f"{risk_type}: {location}",
+                            icon=folium.Icon(color='blue', icon='info-sign')
+                        ).add_to(m)
+                        
+                        folium_static(m, width=300, height=200)
+                    except ImportError:
+                        st.info("📍 Coordinates: {lat}, {lon}")
+                
+                # Show time ago
+                time_ago = get_time_ago(created_at)
+                st.caption(f"📅 {time_ago}")
+                
+                # Show confirmations
+                if confirmations > 0:
+                    st.info(f"✅ {confirmations} confirmations")
+        
+        # Add separator between reports
+        if i < len(filtered_reports) - 1:
+            st.markdown("---")
+    
+    # Call to action
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem; background-color: #f0f2f6; border-radius: 10px;'>
+        <h3>🚀 Want to see verified reports?</h3>
+        <p>Sign up for a free account to:</p>
+        <ul style='text-align: left; display: inline-block;'>
+            <li>📋 View verified risk reports</li>
+            <li>✍️ Submit your own reports</li>
+            <li>👍 Upvote and comment on reports</li>
+            <li>📊 Access detailed analytics</li>
+            <li>🔔 Get real-time notifications</li>
+        </ul>
+        <br>
+        <p><strong>Join thousands of users making Nigerian roads safer!</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_news_reports():
+    """Display news reports for public access"""
+    st.header("📰 News Road Reports")
+    st.info("🔓 These reports are sourced from news outlets and are publicly available.")
+    
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Reports", type="secondary"):
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
+    
+    # Get news reports
+    news_reports = get_news_reports(100)
+    
+    if not news_reports:
+        st.warning("📭 No news reports available at the moment.")
+        return
+    
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        risk_type_filter = st.selectbox(
+            "Filter by Risk Type:",
+            ["All"] + list(set([report[1] for report in news_reports]))
+        )
+    
+    with col2:
+        risk_level_filter = st.selectbox(
+            "Filter by Risk Level:",
+            ["All", "low", "medium", "high", "critical"]
+        )
+    
+    # Apply filters
+    filtered_reports = []
+    for report in news_reports:
+        if risk_type_filter != "All" and report[1] != risk_type_filter:
+            continue
+        if risk_level_filter != "All" and report[13] != risk_level_filter:
+            continue
+        filtered_reports.append(report)
+    
+    st.success(f"📊 Showing {len(filtered_reports)} news reports")
+    
+    # Display reports
+    for i, report in enumerate(filtered_reports):
+        report_id, risk_type, description, location, lat, lon, status, confirmations, created_at, user_name, source_type, source_url, is_verified, risk_level = report
+        
+        # Create expandable container for each report
+        with st.expander(f"📰 {risk_type.title()} - {location} ({risk_level.upper()})"):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown(f"**Description:** {description}")
+                st.markdown(f"**Location:** {location}")
+                st.markdown(f"**Reported by:** {user_name}")
+                st.markdown(f"**Source:** News Outlet")
+                st.markdown(f"**Status:** {status.title()}")
+                st.markdown(f"**Risk Level:** {risk_level.upper()}")
+                
+                if source_url:
+                    st.markdown(f"**Source URL:** [{source_url}]({source_url})")
+            
+            with col2:
+                # Show map if coordinates are available
+                if lat and lon:
+                    try:
+                        import folium
+                        from streamlit_folium import folium_static
+                        
+                        m = folium.Map(location=[lat, lon], zoom_start=15)
+                        folium.Marker(
+                            [lat, lon],
+                            popup=f"{risk_type}: {location}",
+                            icon=folium.Icon(color='green', icon='info-sign')
+                        ).add_to(m)
+                        
+                        folium_static(m, width=300, height=200)
+                    except ImportError:
+                        st.info("📍 Coordinates: {lat}, {lon}")
+                
+                # Show time ago
+                time_ago = get_time_ago(created_at)
+                st.caption(f"📅 {time_ago}")
+                
+                # Show confirmations
+                if confirmations > 0:
+                    st.info(f"✅ {confirmations} confirmations")
+        
+        # Add separator between reports
+        if i < len(filtered_reports) - 1:
+            st.markdown("---")
+    
+    # Call to action
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; padding: 2rem; background-color: #f0f2f6; border-radius: 10px;'>
+        <h3>🚀 Want to see verified reports?</h3>
+        <p>Sign up for a free account to:</p>
+        <ul style='text-align: left; display: inline-block;'>
+            <li>📋 View verified risk reports</li>
+            <li>✍️ Submit your own reports</li>
+            <li>👍 Upvote and comment on reports</li>
+            <li>📊 Access detailed analytics</li>
+            <li>🔔 Get real-time notifications</li>
+        </ul>
+        <br>
+        <p><strong>Join thousands of users making Nigerian roads safer!</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
 
 def show_about_page():
     st.header("ℹ️ About Nigerian Road Risk Reporter")
@@ -4093,6 +4725,33 @@ def show_security_page():
         - Keep your contact information updated
         """)
         
+        # Auto-refresh configuration
+        st.subheader("🔄 Auto-Refresh Settings")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            auto_refresh_enabled = st.checkbox(
+                "Enable Auto-Refresh", 
+                value=AUTO_REFRESH_CONFIG['enabled'],
+                key="auto_refresh_enabled"
+            )
+            
+            if auto_refresh_enabled != AUTO_REFRESH_CONFIG['enabled']:
+                AUTO_REFRESH_CONFIG['enabled'] = auto_refresh_enabled
+                st.success("✅ Auto-refresh setting updated!")
+        
+        with col2:
+            refresh_interval = st.selectbox(
+                "Refresh Interval",
+                [15, 30, 60, 120, 300],
+                index=[15, 30, 60, 120, 300].index(AUTO_REFRESH_CONFIG['interval_seconds']),
+                key="refresh_interval"
+            )
+            
+            if refresh_interval != AUTO_REFRESH_CONFIG['interval_seconds']:
+                AUTO_REFRESH_CONFIG['interval_seconds'] = refresh_interval
+                st.success("✅ Refresh interval updated!")
+        
         # Show current user's security status
         if st.session_state.get('user'):
             st.subheader("🔍 Your Security Status")
@@ -4224,6 +4883,11 @@ def show_deployment_page():
 def show_road_status_checker():
     """Display Road Status Checker page for travelers"""
     st.header("🛣️ Road Status Checker (Enhanced)")
+    
+    # Public access welcome message
+    if not st.session_state.get('authenticated'):
+        st.success("🎉 **Welcome! This feature is available to everyone without registration.**")
+        st.info("🔍 Check road conditions, get travel advice, and view recent reports - all free and accessible to the public.")
     
     # Disclaimer
     st.warning("""
@@ -4481,6 +5145,29 @@ def show_road_status_checker():
     - Real-time updates from multiple sources
     - Location-specific recommendations based on local conditions
     """)
+    
+    # Call-to-action for public users
+    if not st.session_state.get('authenticated'):
+        st.markdown("---")
+        st.subheader("🚀 Get More Features!")
+        st.info("""
+        **Want to contribute and get more features?**
+        - ✍️ Submit your own road reports
+        - 👍 Upvote and comment on reports
+        - 📊 Access detailed analytics
+        - 🔔 Get real-time notifications
+        - 📱 Use mobile app features
+        """)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔐 Login", type="primary"):
+                st.session_state.current_page = "Login"
+                st.rerun()
+        with col2:
+            if st.button("📝 Register", type="secondary"):
+                st.session_state.current_page = "Register"
+                st.rerun()
 
 def get_road_risk_reports(road_name: str, state: str, hours: int = 168) -> list:
     """Get risk reports for a specific road within specified time period"""

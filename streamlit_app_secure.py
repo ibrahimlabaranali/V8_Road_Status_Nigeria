@@ -41,6 +41,87 @@ except ImportError:
     ROADS_DB_AVAILABLE = False
     nigerian_roads_db = None
 
+# Auto-refresh configuration
+AUTO_REFRESH_CONFIG = {
+    'enabled': True,
+    'interval_seconds': 30,  # Auto-refresh every 30 seconds
+    'manual_refresh_enabled': True,
+    'show_refresh_status': True
+}
+
+def check_for_new_reports():
+    """Check if there are new reports since last check"""
+    if 'last_report_check' not in st.session_state:
+        st.session_state.last_report_check = datetime.now()
+        st.session_state.last_report_count = 0
+    
+    # Update last check time
+    st.session_state.last_report_check = datetime.now()
+    
+    # Get current report count
+    try:
+        conn = sqlite3.connect('db/risk_reports.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM risk_reports')
+        current_count = cursor.fetchone()[0]
+        conn.close()
+    except:
+        current_count = 0
+    
+    # Check if there are new reports
+    if current_count > st.session_state.last_report_count:
+        new_reports = current_count - st.session_state.last_report_count
+        st.session_state.last_report_count = current_count
+        return True, new_reports
+    
+    return False, 0
+
+def get_last_update_time():
+    """Get the time of last update check"""
+    if 'last_report_check' in st.session_state:
+        return st.session_state.last_report_check
+    return None
+
+def trigger_auto_refresh():
+    """Trigger auto-refresh when new reports are detected"""
+    if AUTO_REFRESH_CONFIG['enabled']:
+        has_new_reports, new_count = check_for_new_reports()
+        if has_new_reports:
+            # Show notification
+            st.success(f"🆕 {new_count} new report(s) detected! Auto-refreshing...")
+            
+            # Add to session state for persistent notification
+            if 'notifications' not in st.session_state:
+                st.session_state.notifications = []
+            
+            notification = {
+                'type': 'new_reports',
+                'message': f"{new_count} new report(s) detected",
+                'timestamp': datetime.now(),
+                'count': new_count
+            }
+            st.session_state.notifications.append(notification)
+            
+            # Auto-refresh after brief delay
+            time.sleep(2)
+            st.rerun()
+
+def show_notifications():
+    """Display notifications to users"""
+    if 'notifications' in st.session_state and st.session_state.notifications:
+        st.subheader("🔔 Recent Notifications")
+        
+        for i, notification in enumerate(st.session_state.notifications[-5:]):  # Show last 5
+            if notification['type'] == 'new_reports':
+                st.info(f"🆕 {notification['message']} at {notification['timestamp'].strftime('%H:%M:%S')}")
+        
+        # Clear old notifications (older than 1 hour)
+        current_time = datetime.now()
+        st.session_state.notifications = [
+            n for n in st.session_state.notifications 
+            if (current_time - n['timestamp']).total_seconds() < 3600
+        ]
+
 # Helper functions that need to be implemented
 def check_login_attempts(identifier: str = None) -> bool:
     """Check if login attempts exceed limit"""
@@ -113,6 +194,86 @@ def check_user_exists(email: str = None, phone: str = None, nin: str = None) -> 
         return False
     except:
         return False
+
+def get_social_media_reports(limit: int = 50) -> list:
+    """Get social media reports for public access"""
+    try:
+        conn = sqlite3.connect('db/users.db')
+        cursor = conn.cursor()
+        
+        # Get social media reports only
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.source_type = 'social_media'
+            AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_news_reports(limit: int = 50) -> list:
+    """Get news reports for public access"""
+    try:
+        conn = sqlite3.connect('db/users.db')
+        cursor = conn.cursor()
+        
+        # Get news reports only
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.source_type = 'news'
+            AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
+
+def get_verified_reports(limit: int = 50) -> list:
+    """Get verified reports that require user authentication"""
+    try:
+        conn = sqlite3.connect('db/users.db')
+        cursor = conn.cursor()
+        
+        # Get only verified reports
+        query = '''
+            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
+                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
+                   r.is_verified, r.risk_level
+            FROM risk_reports r
+            JOIN users u ON r.user_id = u.id
+            WHERE r.is_verified = 1 AND r.status != 'false'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        '''
+        
+        cursor.execute(query, (limit,))
+        reports = cursor.fetchall()
+        conn.close()
+        
+        return reports
+    except Exception:
+        return []
 
 # Enhanced security configuration
 SECURITY_CONFIG = {
@@ -600,6 +761,28 @@ def main():
             st.error("Session expired or invalid. Please log in again.")
             return
     
+    # Auto-refresh functionality
+    if AUTO_REFRESH_CONFIG['enabled']:
+        # Check for new reports and trigger refresh if needed
+        trigger_auto_refresh()
+        
+        # Add auto-refresh meta tag
+        st.markdown(f"""
+        <meta http-equiv="refresh" content="{AUTO_REFRESH_CONFIG['interval_seconds']}">
+        """, unsafe_allow_html=True)
+        
+        # Show refresh status
+        if AUTO_REFRESH_CONFIG['show_refresh_status']:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.info(f"🔄 Auto-refresh enabled - Updates every {AUTO_REFRESH_CONFIG['interval_seconds']} seconds")
+            with col2:
+                if st.button("🔄 Manual Refresh", type="secondary", key="main_refresh"):
+                    st.rerun()
+        
+        # Show notifications
+        show_notifications()
+    
     # Display security header
     st.markdown('<div class="secure-header">', unsafe_allow_html=True)
     st.markdown("🔒 **RoadReportNG - Secure Version**")
@@ -698,6 +881,20 @@ def show_dashboard():
     st.header("📊 Secure Dashboard")
     st.markdown("Welcome to your secure road reporting dashboard.")
     
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Dashboard", type="secondary"):
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
+    
     # Display user info
     st.info(f"User ID: {st.session_state.user_id}")
     st.info(f"Role: {st.session_state.role}")
@@ -729,10 +926,28 @@ def show_submit_report():
         
         if submit:
             st.success("Report submitted successfully!")
+            
+            # Auto-refresh notification
+            if AUTO_REFRESH_CONFIG['enabled']:
+                st.info(f"🔄 Report submitted successfully! The app will automatically refresh in {AUTO_REFRESH_CONFIG['interval_seconds']} seconds to show the latest data.")
 
 def show_view_reports():
     st.header("👁️ View Reports")
     st.markdown("View and manage your submitted reports.")
+    
+    # Auto-refresh and manual refresh options
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Reports", type="secondary"):
+            st.rerun()
+    
+    with col2:
+        # Auto-refresh status
+        if AUTO_REFRESH_CONFIG['enabled']:
+            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+        else:
+            st.warning("🔄 Auto-refresh disabled")
     
     st.info("Report viewing functionality will be implemented here")
 
@@ -746,7 +961,34 @@ def show_settings_page():
     st.header("⚙️ Security Settings")
     st.markdown("Manage your account security settings.")
     
-    st.info("Settings functionality will be implemented here")
+    # Auto-refresh configuration
+    st.subheader("🔄 Auto-Refresh Settings")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        auto_refresh_enabled = st.checkbox(
+            "Enable Auto-Refresh", 
+            value=AUTO_REFRESH_CONFIG['enabled'],
+            key="auto_refresh_enabled"
+        )
+        
+        if auto_refresh_enabled != AUTO_REFRESH_CONFIG['enabled']:
+            AUTO_REFRESH_CONFIG['enabled'] = auto_refresh_enabled
+            st.success("✅ Auto-refresh setting updated!")
+    
+    with col2:
+        refresh_interval = st.selectbox(
+            "Refresh Interval",
+            [15, 30, 60, 120, 300],
+            index=[15, 30, 60, 120, 300].index(AUTO_REFRESH_CONFIG['interval_seconds']),
+            key="refresh_interval"
+        )
+        
+        if refresh_interval != AUTO_REFRESH_CONFIG['interval_seconds']:
+            AUTO_REFRESH_CONFIG['interval_seconds'] = refresh_interval
+            st.success("✅ Refresh interval updated!")
+    
+    st.info("Additional security settings will be implemented here")
 
 def show_admin_dashboard():
     st.header("🔒 Admin Dashboard")

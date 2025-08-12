@@ -77,6 +77,7 @@ AUTO_REFRESH_CONFIG = {
     'base_interval_seconds': 900,  # 15 minutes base interval
     'critical_interval_seconds': 30,  # 30 seconds for critical risks
     'high_risk_interval_seconds': 120,  # 2 minutes for high-risk situations
+    'interval_seconds': 900,  # Default interval for backward compatibility
     'manual_refresh_enabled': True,
     'show_refresh_status': True,
     'smart_refresh': True,  # Enable intelligent refresh

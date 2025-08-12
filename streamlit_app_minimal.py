@@ -24,9 +24,19 @@ import urllib.parse
 try:
     from nigerian_roads_data import nigerian_roads_db
     ROADS_DB_AVAILABLE = True
+    # Initialize the Nigerian roads database if available
+    if nigerian_roads_db:
+        try:
+            nigerian_roads_db.init_database()
+            st.success("✅ Nigerian roads database initialized successfully!")
+        except Exception as e:
+            st.error(f"⚠️ Failed to initialize Nigerian roads database: {str(e)}")
+            ROADS_DB_AVAILABLE = False
+            nigerian_roads_db = None
 except ImportError:
     ROADS_DB_AVAILABLE = False
     nigerian_roads_db = None
+    st.warning("⚠️ Nigerian roads database module not available")
 
 # Import enhanced reports system
 try:
@@ -61,33 +71,107 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Auto-refresh configuration
+# Intelligent auto-refresh configuration
 AUTO_REFRESH_CONFIG = {
     'enabled': True,
-    'interval_seconds': 30,  # Auto-refresh every 30 seconds
+    'base_interval_seconds': 900,  # 15 minutes base interval
+    'critical_interval_seconds': 30,  # 30 seconds for critical risks
+    'high_risk_interval_seconds': 120,  # 2 minutes for high-risk situations
     'manual_refresh_enabled': True,
-    'show_refresh_status': True
+    'show_refresh_status': True,
+    'smart_refresh': True,  # Enable intelligent refresh
+    'risk_threshold': 0.7,  # Risk score threshold for immediate updates
+    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed'],
+    'max_refresh_count': 20
 }
 
 def check_for_new_reports():
-    """Check if there are new reports since last check"""
+    """Check if there are new reports since last check with intelligent risk assessment"""
     if 'last_report_check' not in st.session_state:
         st.session_state.last_report_check = datetime.now()
         st.session_state.last_report_count = 0
+        st.session_state.last_critical_check = datetime.now()
+        st.session_state.critical_risks_count = 0
     
-    # Update last check time
-    st.session_state.last_report_check = datetime.now()
+    current_time = datetime.now()
     
-    # Get current report count
-    current_count = len(get_risk_reports())
+    # Get current reports
+    current_reports = get_risk_reports()
+    current_count = len(current_reports)
     
-    # Check if there are new reports
+    # Check for new reports
+    has_new_reports = False
+    new_count = 0
+    critical_risks = []
+    
     if current_count > st.session_state.last_report_count:
         new_reports = current_count - st.session_state.last_report_count
         st.session_state.last_report_count = current_count
-        return True, new_reports
+        has_new_reports = True
+        new_count = new_reports
+        
+        # Analyze new reports for critical risks
+        recent_reports = get_recent_reports(hours=1)  # Get reports from last hour
+        critical_risks = analyze_critical_risks(recent_reports)
     
-    return False, 0
+    # Update last check time
+    st.session_state.last_report_check = current_time
+    
+    return has_new_reports, new_count, critical_risks
+
+def analyze_critical_risks(reports):
+    """Analyze reports to identify critical risks that need immediate attention"""
+    critical_risks = []
+    
+    for report in reports:
+        risk_score = calculate_risk_score(report)
+        
+        # Check if report contains emergency keywords
+        report_text = f"{report.get('risk_type', '')} {report.get('description', '')} {report.get('location', '')}".lower()
+        has_emergency_keywords = any(keyword in report_text for keyword in AUTO_REFRESH_CONFIG['emergency_keywords'])
+        
+        # Check if risk score exceeds threshold or has emergency keywords
+        if risk_score > AUTO_REFRESH_CONFIG['risk_threshold'] or has_emergency_keywords:
+            critical_risks.append({
+                'report_id': report.get('id'),
+                'risk_type': report.get('risk_type'),
+                'description': report.get('description'),
+                'location': report.get('location'),
+                'severity': report.get('severity'),
+                'risk_score': risk_score,
+                'is_emergency': has_emergency_keywords,
+                'timestamp': report.get('created_at')
+            })
+    
+    return critical_risks
+
+def calculate_risk_score(report):
+    """Calculate a risk score based on report factors"""
+    score = 0.0
+    
+    # Base score from severity
+    severity_scores = {'low': 0.2, 'medium': 0.5, 'high': 0.8, 'critical': 1.0}
+    score += severity_scores.get(report.get('severity', 'medium'), 0.5)
+    
+    # Additional score for recent reports (last 2 hours get bonus)
+    if report.get('created_at'):
+        try:
+            created_time = datetime.fromisoformat(report['created_at'].replace('Z', '+00:00'))
+            hours_old = (datetime.now() - created_time).total_seconds() / 3600
+            if hours_old <= 2:
+                score += 0.2  # Recent reports get higher priority
+        except:
+            pass
+    
+    # Additional score for verified reports
+    if report.get('status') == 'verified':
+        score += 0.1
+    
+    # Additional score for reports with images
+    if report.get('image_url'):
+        score += 0.1
+    
+    return min(score, 1.0)  # Cap at 1.0
 
 def get_last_update_time():
     """Get the time of last update check"""
@@ -96,44 +180,329 @@ def get_last_update_time():
     return None
 
 def trigger_auto_refresh():
-    """Trigger auto-refresh when new reports are detected"""
-    if AUTO_REFRESH_CONFIG['enabled']:
-        has_new_reports, new_count = check_for_new_reports()
-        if has_new_reports:
-            # Show notification
-            st.success(f"🆕 {new_count} new report(s) detected! Auto-refreshing...")
-            
-            # Add to session state for persistent notification
-            if 'notifications' not in st.session_state:
-                st.session_state.notifications = []
-            
-            notification = {
-                'type': 'new_reports',
-                'message': f"{new_count} new report(s) detected",
-                'timestamp': datetime.now(),
-                'count': new_count
-            }
-            st.session_state.notifications.append(notification)
-            
-            # Auto-refresh after brief delay
-            time.sleep(2)
+    """Trigger intelligent auto-refresh based on risk assessment"""
+    if not AUTO_REFRESH_CONFIG['enabled']:
+        return
+    
+    # Check for new reports and critical risks
+    has_new_reports, new_count, critical_risks = check_for_new_reports()
+    
+    if has_new_reports:
+        # Determine refresh interval based on risk level
+        refresh_interval = determine_refresh_interval(critical_risks)
+        
+        # Show appropriate notification
+        if critical_risks:
+            critical_count = len([r for r in critical_risks if r['is_emergency']])
+            if critical_count > 0:
+                st.error(f"🚨 {critical_count} CRITICAL RISK(S) DETECTED! Immediate update required!")
+                st.warning("⚠️ Road safety alert - please check details immediately!")
+            else:
+                st.warning(f"⚠️ {len(critical_risks)} high-risk report(s) detected! Updating in {refresh_interval} seconds...")
+        else:
+            st.success(f"🆕 {new_count} new report(s) detected! Updating in {refresh_interval} seconds...")
+        
+        # Add to session state for persistent notification
+        if 'notifications' not in st.session_state:
+            st.session_state.notifications = []
+        
+        notification = {
+            'type': 'new_reports',
+            'message': f"{new_count} new report(s) detected",
+            'timestamp': datetime.now(),
+            'count': new_count,
+            'critical_risks': len(critical_risks),
+            'refresh_interval': refresh_interval
+        }
+        st.session_state.notifications.append(notification)
+        
+        # Schedule refresh based on risk level
+        if refresh_interval <= AUTO_REFRESH_CONFIG['critical_interval_seconds']:
+            # Critical risk - refresh immediately
+            st.rerun()
+        else:
+            # Schedule refresh after calculated interval
+            time.sleep(refresh_interval)
             st.rerun()
 
-def show_notifications():
-    """Display notifications to users"""
+def determine_refresh_interval(critical_risks):
+    """Determine the appropriate refresh interval based on risk assessment"""
+    if not critical_risks:
+        return AUTO_REFRESH_CONFIG['base_interval_seconds']
+    
+    # Check for emergency keywords (immediate refresh)
+    emergency_risks = [r for r in critical_risks if r['is_emergency']]
+    if emergency_risks:
+        return AUTO_REFRESH_CONFIG['critical_interval_seconds']
+    
+    # Check for high-risk scores
+    high_risk_count = len([r for r in critical_risks if r['risk_score'] > 0.8])
+    if high_risk_count > 0:
+        return AUTO_REFRESH_CONFIG['high_risk_interval_seconds']
+    
+    # Medium risk - use base interval
+    return AUTO_REFRESH_CONFIG['base_interval_seconds']
+
+def get_current_refresh_interval():
+    """Get the current refresh interval based on active risks"""
     if 'notifications' in st.session_state and st.session_state.notifications:
-        st.subheader("🔔 Recent Notifications")
+        latest_notification = st.session_state.notifications[-1]
+        return latest_notification.get('refresh_interval', AUTO_REFRESH_CONFIG['base_interval_seconds'])
+    return AUTO_REFRESH_CONFIG['base_interval_seconds']
+
+def get_interval_display_text(interval_seconds):
+    """Convert interval seconds to human-readable text"""
+    if interval_seconds <= AUTO_REFRESH_CONFIG['critical_interval_seconds']:
+        return "🚨 **IMMEDIATE** (Critical Risks)"
+    elif interval_seconds <= AUTO_REFRESH_CONFIG['high_risk_interval_seconds']:
+        return "⚠️ **Frequent** (High Risks)"
+    else:
+        return "✅ **Standard** (Normal Risks)"
+
+def show_notifications():
+    """Display intelligent notifications with risk assessment"""
+    if 'notifications' in st.session_state and st.session_state.notifications:
+        st.subheader("🔔 Smart Notifications")
         
-        for i, notification in enumerate(st.session_state.notifications[-5:]):  # Show last 5
-            if notification['type'] == 'new_reports':
+        # Show critical risks first
+        critical_notifications = [n for n in st.session_state.notifications if n.get('critical_risks', 0) > 0]
+        if critical_notifications:
+            st.error("🚨 **CRITICAL ALERTS**")
+            for notification in critical_notifications[-3:]:  # Show last 3 critical
+                st.error(f"""
+                🚨 **{notification['critical_risks']} Critical Risk(s) Detected!**
+                📍 {notification['message']} at {notification['timestamp'].strftime('%H:%M:%S')}
+                ⏱️ Updates every {notification.get('refresh_interval', 'N/A')} seconds
+                """)
+        
+        # Show regular notifications
+        regular_notifications = [n for n in st.session_state.notifications if n.get('critical_risks', 0) == 0]
+        if regular_notifications:
+            st.info("ℹ️ **Regular Updates**")
+            for notification in regular_notifications[-3:]:  # Show last 3 regular
                 st.info(f"🆕 {notification['message']} at {notification['timestamp'].strftime('%H:%M:%S')}")
         
-        # Clear old notifications (older than 1 hour)
+        # Clear old notifications (older than 2 hours for critical, 1 hour for regular)
         current_time = datetime.now()
         st.session_state.notifications = [
             n for n in st.session_state.notifications 
-            if (current_time - n['timestamp']).total_seconds() < 3600
+            if (current_time - n['timestamp']).total_seconds() < (7200 if n.get('critical_risks', 0) > 0 else 3600)
         ]
+
+def start_critical_risk_monitoring():
+    """Start real-time monitoring for critical risks"""
+    if 'critical_monitoring_active' not in st.session_state:
+        st.session_state.critical_monitoring_active = False
+    
+    if not st.session_state.critical_monitoring_active:
+        st.session_state.critical_monitoring_active = True
+        st.session_state.last_critical_check = datetime.now()
+        st.session_state.critical_risks_active = []
+
+def check_critical_risks_realtime():
+    """Continuously check for critical risks in real-time"""
+    if not st.session_state.get('critical_monitoring_active', False):
+        return
+    
+    current_time = datetime.now()
+    last_check = st.session_state.get('last_critical_check', current_time)
+    
+    # Check every 30 seconds for critical risks
+    if (current_time - last_check).total_seconds() >= AUTO_REFRESH_CONFIG['critical_interval_seconds']:
+        # Get recent reports and analyze for critical risks
+        recent_reports = get_recent_reports(hours=1)
+        critical_risks = analyze_critical_risks(recent_reports)
+        
+        # Update active critical risks
+        st.session_state.critical_risks_active = critical_risks
+        st.session_state.last_critical_check = current_time
+        
+        # Trigger immediate refresh if new critical risks detected
+        if critical_risks:
+            emergency_count = len([r for r in critical_risks if r['is_emergency']])
+            if emergency_count > 0:
+                st.error(f"🚨 **EMERGENCY ALERT!** {emergency_count} critical risk(s) detected!")
+                st.rerun()
+
+def get_active_critical_risks():
+    """Get currently active critical risks"""
+    return st.session_state.get('critical_risks_active', [])
+
+def show_critical_risk_dashboard():
+    """Display real-time critical risk dashboard"""
+    active_risks = get_active_critical_risks()
+    
+    if active_risks:
+        st.subheader("🚨 **LIVE CRITICAL RISK MONITORING**")
+        
+        # Group risks by severity
+        emergency_risks = [r for r in active_risks if r['is_emergency']]
+        high_risks = [r for r in active_risks if r['risk_score'] > 0.8 and not r['is_emergency']]
+        
+        if emergency_risks:
+            st.error("🚨 **EMERGENCY SITUATIONS**")
+            for risk in emergency_risks:
+                st.error(f"""
+                **{risk['risk_type']}** at {risk['location']}
+                {risk['description'][:100]}...
+                **Risk Score:** {risk['risk_score']:.2f} | **Reported:** {risk['timestamp']}
+                """)
+        
+        if high_risks:
+            st.warning("⚠️ **HIGH RISK SITUATIONS**")
+            for risk in high_risks:
+                st.warning(f"""
+                **{risk['risk_type']}** at {risk['location']}
+                {risk['description'][:100]}...
+                **Risk Score:** {risk['risk_score']:.2f} | **Reported:** {risk['timestamp']}
+                """)
+        
+        # Show refresh status
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info(f"🔄 **Monitoring Active** - Updates every {AUTO_REFRESH_CONFIG['critical_interval_seconds']} seconds")
+        with col2:
+            if st.button("🔄 Force Update", type="secondary", key="critical_refresh"):
+                st.rerun()
+    else:
+        st.success("✅ **No Critical Risks Detected** - Road conditions are normal")
+
+def show_critical_risk_monitor_page():
+    """Display the dedicated Critical Risk Monitor page"""
+    st.title("🚨 Critical Risk Monitor")
+    st.markdown("### Real-time monitoring of critical road safety situations")
+    
+    # Start monitoring
+    start_critical_risk_monitoring()
+    check_critical_risks_realtime()
+    
+    # Show monitoring status
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        if st.session_state.get('critical_monitoring_active', False):
+            st.success("✅ **Monitoring Active**")
+        else:
+            st.error("❌ **Monitoring Inactive**")
+    
+    with col2:
+        last_check = st.session_state.get('last_critical_check', 'Never')
+        if isinstance(last_check, datetime):
+            st.info(f"🕐 Last Check: {last_check.strftime('%H:%M:%S')}")
+        else:
+            st.info(f"🕐 Last Check: {last_check}")
+    
+    with col3:
+        if st.button("🔄 Refresh Now", type="secondary", key="monitor_refresh"):
+            st.rerun()
+    
+    st.divider()
+    
+    # Show active critical risks
+    active_risks = get_active_critical_risks()
+    
+    if active_risks:
+        st.subheader("🚨 **ACTIVE CRITICAL RISKS**")
+        
+        # Emergency risks (highest priority)
+        emergency_risks = [r for r in active_risks if r['is_emergency']]
+        if emergency_risks:
+            st.error("🚨 **EMERGENCY SITUATIONS - IMMEDIATE ACTION REQUIRED**")
+            for i, risk in enumerate(emergency_risks):
+                with st.expander(f"🚨 EMERGENCY #{i+1}: {risk['risk_type']} at {risk['location']}", expanded=True):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.error(f"""
+                        **Risk Type:** {risk['risk_type']}
+                        **Location:** {risk['location']}
+                        **Description:** {risk['description']}
+                        **Risk Score:** {risk['risk_score']:.2f}
+                        **Reported:** {risk['timestamp']}
+                        """)
+                    with col2:
+                        st.error("🚨 **IMMEDIATE UPDATE**")
+                        st.info(f"Updates every {AUTO_REFRESH_CONFIG['critical_interval_seconds']} seconds")
+        
+        # High risks
+        high_risks = [r for r in active_risks if r['risk_score'] > 0.8 and not r['is_emergency']]
+        if high_risks:
+            st.warning("⚠️ **HIGH RISK SITUATIONS**")
+            for i, risk in enumerate(high_risks):
+                with st.expander(f"⚠️ HIGH RISK #{i+1}: {risk['risk_type']} at {risk['location']}"):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.warning(f"""
+                        **Risk Type:** {risk['risk_type']}
+                        **Location:** {risk['location']}
+                        **Description:** {risk['description']}
+                        **Risk Score:** {risk['risk_score']:.2f}
+                        **Reported:** {risk['timestamp']}
+                        """)
+                    with col2:
+                        st.warning("⚠️ **FREQUENT UPDATE**")
+                        st.info(f"Updates every {AUTO_REFRESH_CONFIG['high_risk_interval_seconds']} seconds")
+        
+        # Medium risks
+        medium_risks = [r for r in active_risks if 0.5 <= r['risk_score'] <= 0.8]
+        if medium_risks:
+            st.info("ℹ️ **MEDIUM RISK SITUATIONS**")
+            for i, risk in enumerate(medium_risks):
+                with st.expander(f"ℹ️ MEDIUM RISK #{i+1}: {risk['risk_type']} at {risk['location']}"):
+                    st.info(f"""
+                    **Risk Type:** {risk['risk_type']}
+                    **Location:** {risk['location']}
+                    **Description:** {risk['description']}
+                    **Risk Score:** {risk['risk_score']:.2f}
+                    **Reported:** {risk['timestamp']}
+                    """)
+        
+        # Show monitoring configuration
+        st.divider()
+        st.subheader("⚙️ **Monitoring Configuration**")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Critical Interval", f"{AUTO_REFRESH_CONFIG['critical_interval_seconds']}s")
+        with col2:
+            st.metric("High Risk Interval", f"{AUTO_REFRESH_CONFIG['high_risk_interval_seconds']}s")
+        with col3:
+            st.metric("Base Interval", f"{AUTO_REFRESH_CONFIG['base_interval_seconds']}s")
+        
+        st.info(f"""
+        **Risk Threshold:** {AUTO_REFRESH_CONFIG['risk_threshold']}
+        **Emergency Keywords:** {', '.join(AUTO_REFRESH_CONFIG['emergency_keywords'])}
+        **Smart Refresh:** {'Enabled' if AUTO_REFRESH_CONFIG['smart_refresh'] else 'Disabled'}
+        """)
+        
+    else:
+        st.success("✅ **NO CRITICAL RISKS DETECTED**")
+        st.info("Road conditions are currently normal. The system continues to monitor for any new risks.")
+        
+        # Show monitoring info even when no risks
+        st.divider()
+        st.subheader("📊 **Monitoring Status**")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.success("✅ **System Active**")
+            st.info(f"Monitoring every {AUTO_REFRESH_CONFIG['base_interval_seconds']} seconds")
+        with col2:
+            st.info("🔍 **Scanning for:**")
+            st.write("• Emergency situations")
+            st.write("• High-risk reports")
+            st.write("• New critical alerts")
+    
+    # Auto-refresh this page for critical monitoring
+    if active_risks:
+        emergency_count = len([r for r in active_risks if r['is_emergency']])
+        if emergency_count > 0:
+            st.error("🚨 **EMERGENCY MODE ACTIVE** - Page will refresh automatically for immediate updates!")
+            time.sleep(AUTO_REFRESH_CONFIG['critical_interval_seconds'])
+            st.rerun()
+        else:
+            st.warning("⚠️ **HIGH RISK MODE** - Page will refresh for frequent updates")
+            time.sleep(AUTO_REFRESH_CONFIG['high_risk_interval_seconds'])
+            st.rerun()
 
 # Custom CSS for clean UI with improved accessibility
 st.markdown("""
@@ -639,6 +1008,7 @@ def log_login_attempt(success: bool, identifier: str = None, user_ip: str = None
         else:
             st.session_state.login_attempts = 0
             st.session_state.last_login_attempt = None
+        print(f"Failed to log login attempt: {e}")
 
 def validate_email(email: str) -> bool:
     """Simple email validation"""
@@ -1516,24 +1886,41 @@ def main():
     if not st.session_state.get('authenticated'):
         st.success("🎉 **Public Access Available!** Check road status without registration using the sidebar navigation.")
     
-    # Auto-refresh functionality
+    # Intelligent auto-refresh functionality
     if AUTO_REFRESH_CONFIG['enabled']:
         # Check for new reports and trigger refresh if needed
         trigger_auto_refresh()
         
-        # Add auto-refresh meta tag
-        st.markdown(f"""
-        <meta http-equiv="refresh" content="{AUTO_REFRESH_CONFIG['interval_seconds']}">
-        """, unsafe_allow_html=True)
-        
-        # Show refresh status
+        # Show intelligent refresh status
         if AUTO_REFRESH_CONFIG['show_refresh_status']:
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.info(f"🔄 Auto-refresh enabled - Updates every {AUTO_REFRESH_CONFIG['interval_seconds']} seconds")
+                # Show current refresh interval based on risk level
+                current_interval = get_current_refresh_interval()
+                interval_text = get_interval_display_text(current_interval)
+                
+                st.info(f"🔄 **Smart Auto-refresh Active** - {interval_text}")
+                
+                # Show risk level indicator
+                if 'notifications' in st.session_state and st.session_state.notifications:
+                    latest_notification = st.session_state.notifications[-1]
+                    if latest_notification.get('critical_risks', 0) > 0:
+                        st.warning(f"🚨 **{latest_notification['critical_risks']} Critical Risk(s) Active** - Immediate updates enabled")
+                    else:
+                        st.success("✅ **Normal Risk Level** - Standard refresh intervals")
+            
             with col2:
                 if st.button("🔄 Manual Refresh", type="secondary", key="main_refresh"):
                     st.rerun()
+        
+        # Start critical risk monitoring
+        start_critical_risk_monitoring()
+        check_critical_risks_realtime()
+        
+        # Show critical risk dashboard if risks are active
+        active_risks = get_active_critical_risks()
+        if active_risks:
+            show_critical_risk_dashboard()
         
         # Show notifications
         show_notifications()
@@ -1605,8 +1992,8 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
-            index=["Dashboard", "Road Status Checker", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
+            ["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
+            index=["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
         )
         
         # Update session state if page changed
@@ -1617,6 +2004,8 @@ def main():
             show_dashboard()
         elif page == "Road Status Checker":
             show_road_status_checker()
+        elif page == "Critical Risk Monitor":
+            show_critical_risk_monitor_page()
         elif page == "Submit Report":
             show_submit_report()
         elif page == "View Reports":
@@ -1661,11 +2050,13 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Road Status Checker", "Public Reports", "Social Media Reports", "News Reports", "About", "Login", "Admin Login", "Register", "Reset Password"]
+            ["Road Status Checker", "Critical Risk Monitor", "Public Reports", "Social Media Reports", "News Reports", "About", "Login", "Admin Login", "Register", "Reset Password"]
         )
         
         if page == "Road Status Checker":
             show_road_status_checker()
+        elif page == "Critical Risk Monitor":
+            show_critical_risk_monitor_page()
         elif page == "Public Reports":
             show_public_reports()
         elif page == "Social Media Reports":
@@ -4889,6 +5280,21 @@ def show_road_status_checker():
         st.success("🎉 **Welcome! This feature is available to everyone without registration.**")
         st.info("🔍 Check road conditions, get travel advice, and view recent reports - all free and accessible to the public.")
     
+    # Ensure Nigerian roads database is available and initialized
+    if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+        try:
+            # Check if database is properly initialized
+            if not hasattr(nigerian_roads_db, 'major_roads') or not nigerian_roads_db.major_roads:
+                st.info("🔄 Initializing Nigerian roads database...")
+                nigerian_roads_db.init_database()
+                st.success("✅ Database initialized successfully!")
+        except Exception as e:
+            st.error(f"⚠️ Failed to initialize Nigerian roads database: {str(e)}")
+            st.info("🔄 Falling back to basic functionality...")
+            # Set flag to use basic search
+            # Note: Cannot modify global variable from within function
+            st.info("🔄 Using basic search functionality due to database initialization failure.")
+    
     # Disclaimer
     st.warning("""
     ⚠️ **DISCLAIMER**: Road status information is based on user reports and automated data collection. 
@@ -4905,219 +5311,299 @@ def show_road_status_checker():
         st.subheader("Search by Road Name")
         
         # Road name input with autocomplete
-        if ROADS_DB_AVAILABLE:
-            major_roads = nigerian_roads_db.get_major_roads()
-            road_names = [road['name'] for road in major_roads]
-            road_name = st.selectbox("Select Road:", ["Search by typing..."] + road_names)
-            
-            if road_name and road_name != "Search by typing...":
-                # Get road information
-                road_info = nigerian_roads_db.get_road_by_name(road_name)
+        if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+            try:
+                # Ensure database is initialized
+                if not hasattr(nigerian_roads_db, 'major_roads') or not nigerian_roads_db.major_roads:
+                    nigerian_roads_db.init_database()
                 
-                if road_info:
-                    st.success(f"Found road: {road_info['name']}")
-                    
-                    # Display road information
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write(f"**Road Name:** {road_info['name']}")
-                        st.write(f"**Road ID:** {road_info['road_id']}")
-                        st.write(f"**Type:** {road_info['type']}")
-                        st.write(f"**Length:** {road_info['length_km']} km")
-                    
-                    with col2:
-                        st.write(f"**Status:** {road_info['status']}")
-                        st.write(f"**States:** {', '.join(road_info['states'])}")
-                        st.write(f"**Risk Factors:** {', '.join(road_info['risk_factors'])}")
-                    
-                    # Get recent risks for this road
-                    st.subheader("🚨 Recent Risks")
-                    recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road_info['road_id'])
-                    
-                    if recent_risks:
-                        for risk in recent_risks:
-                            with st.expander(f"🚨 {risk.get('risk_type', 'Unknown')} - {risk.get('reported_at', 'Unknown')}"):
-                                col1, col2 = st.columns([2, 1])
-                                
-                                with col1:
-                                    st.write(f"**Risk Type:** {risk.get('risk_type', 'Unknown')}")
-                                    st.write(f"**Description:** {risk.get('description', 'No description')}")
-                                    st.write(f"**Location:** 📍 {risk.get('location', 'Unknown')}")
-                                    st.write(f"**Severity:** {risk.get('severity', 'Unknown')}")
-                                
-                                with col2:
-                                    st.write(f"**State:** {risk.get('state', 'Unknown')}")
-                                    st.write(f"**LGA:** {risk.get('lga', 'Unknown')}")
-                                    st.write(f"**Reported:** {risk.get('reported_at', 'Unknown')}")
+                major_roads = nigerian_roads_db.get_major_roads()
+                if major_roads and isinstance(major_roads, list) and len(major_roads) > 0:
+                    road_names = [road['name'] for road in major_roads if isinstance(road, dict) and 'name' in road]
+                    if road_names:
+                        road_name = st.selectbox("Select Road:", ["Search by typing..."] + road_names)
                     else:
-                        st.info("✅ No recent risks reported for this road.")
-                    
-                    # AI Recommendations
-                    st.subheader("🤖 AI Recommendations")
-                    if recent_risks:
-                        # Analyze risks and provide recommendations
-                        high_risks = [r for r in recent_risks if r.get('severity') in ['High', 'Critical']]
-                        if high_risks:
-                            st.error("🚨 **HIGH RISK ALERT**")
-                            st.markdown("""
-                            **Immediate Actions:**
-                            - Consider alternative routes
-                            - Travel with extreme caution
-                            - Monitor local news for updates
-                            - Contact authorities if necessary
-                            """)
-                        else:
-                            st.warning("⚠️ **MODERATE RISK**")
-                            st.markdown("""
-                            **Precautionary Measures:**
-                            - Stay alert to changing conditions
-                            - Follow traffic advisories
-                            - Report any new issues
-                            """)
+                        st.warning("⚠️ No road names found in database. Using basic search.")
+                        road_name = st.text_input("Enter road name:", placeholder="e.g., Lagos-Ibadan Expressway")
+                else:
+                    st.warning("⚠️ Nigerian roads database is available but returned no data. Using basic search.")
+                    road_name = st.text_input("Enter road name:", placeholder="e.g., Lagos-Ibadan Expressway")
+            except Exception as e:
+                st.error(f"⚠️ Error accessing Nigerian roads database: {str(e)}")
+                st.info("Falling back to basic search functionality.")
+                road_name = st.text_input("Enter road name:", placeholder="e.g., Lagos-Ibadan Expressway")
+        else:
+            # Nigerian roads database not available - use basic search
+            st.info("ℹ️ Using basic road search (Nigerian roads database not available)")
+            road_name = st.text_input("Enter road name:", placeholder="e.g., Lagos-Ibadan Expressway")
+        
+        # Process road name input (common for both database and basic search)
+        if road_name and road_name != "Search by typing...":
+            # Get road information
+            try:
+                if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+                    road_info = nigerian_roads_db.get_road_by_name(road_name)
+                else:
+                    road_info = None
+            except Exception as e:
+                st.error(f"⚠️ Error retrieving road information: {str(e)}")
+                road_info = None
+            
+            if road_info:
+                st.success(f"Found road: {road_info['name']}")
+                
+                # Display road information
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write(f"**Road Name:** {road_info['name']}")
+                    st.write(f"**Road ID:** {road_info['road_id']}")
+                    st.write(f"**Type:** {road_info['type']}")
+                    st.write(f"**Length:** {road_info['length_km']} km")
+                
+                with col2:
+                    st.write(f"**Status:** {road_info['status']}")
+                    st.write(f"**States:** {', '.join(road_info['states'])}")
+                    st.write(f"**Risk Factors:** {', '.join(road_info['risk_factors'])}")
+                
+                # Get recent risks for this road
+                st.subheader("🚨 Recent Risks")
+                try:
+                    if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+                        recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road_info['road_id'])
                     else:
-                        st.success("✅ **CLEAR ROAD**")
+                        recent_risks = []
+                except Exception as e:
+                    st.error(f"⚠️ Error retrieving recent risks: {str(e)}")
+                    recent_risks = []
+                
+                if recent_risks:
+                    for risk in recent_risks:
+                        with st.expander(f"🚨 {risk.get('risk_type', 'Unknown')} - {risk.get('reported_at', 'Unknown')}"):
+                            col1, col2 = st.columns([2, 1])
+                            
+                            with col1:
+                                st.write(f"**Risk Type:** {risk.get('risk_type', 'Unknown')}")
+                                st.write(f"**Description:** {risk.get('description', 'No description')}")
+                                st.write(f"**Location:** 📍 {risk.get('location', 'Unknown')}")
+                                st.write(f"**Severity:** {risk.get('severity', 'Unknown')}")
+                            
+                            with col2:
+                                st.write(f"**State:** {risk.get('state', 'Unknown')}")
+                                st.write(f"**LGA:** {risk.get('lga', 'Unknown')}")
+                                st.write(f"**Reported:** {risk.get('reported_at', 'Unknown')}")
+                else:
+                    st.info("✅ No recent risks reported for this road.")
+                
+                # AI Recommendations
+                st.subheader("🤖 AI Recommendations")
+                if recent_risks:
+                    # Analyze risks and provide recommendations
+                    high_risks = [r for r in recent_risks if r.get('severity') in ['High', 'Critical']]
+                    if high_risks:
+                        st.error("🚨 **HIGH RISK ALERT**")
                         st.markdown("""
-                        **Status:**
-                        - Road appears to be clear of major risks
-                        - Normal driving conditions apply
-                        - Continue to monitor for changes
+                        **Immediate Actions:**
+                        - Consider alternative routes
+                        - Travel with extreme caution
+                        - Monitor local news for updates
+                        - Contact authorities if necessary
                         """)
-                    
-                    # Alternative routes
-                    st.subheader("🔄 Alternative Routes")
-                    if recent_risks:
+                    else:
+                        st.warning("⚠️ **MODERATE RISK**")
+                        st.markdown("""
+                        **Precautionary Measures:**
+                        - Stay alert to changing conditions
+                        - Follow traffic advisories
+                        - Report any new issues
+                        """)
+                else:
+                    st.success("✅ **CLEAR ROAD**")
+                    st.markdown("""
+                    **Status:**
+                    - Road appears to be clear of major risks
+                    - Normal driving conditions apply
+                    - Continue to monitor for changes
+                    """)
+                
+                # Alternative routes
+                st.subheader("🔄 Alternative Routes")
+                if recent_risks:
+                    try:
                         alternatives = get_alternative_routes(road_name, road_info['states'][0] if road_info['states'] else "Unknown")
                         if alternatives:
                             for alt in alternatives:
-                                st.write(f"• **{alt['name']}** - {alt['distance']} km via {alt['route']}")
+                                st.write(f"• **{alt['name']}** - {alt['description']} ({alt['time']})")
                         else:
                             st.info("No alternative routes available. Consider delaying travel if possible.")
-                    else:
-                        st.info("No alternative routes needed - road is clear.")
+                    except Exception as e:
+                        st.error(f"⚠️ Error calculating alternative routes: {str(e)}")
+                        st.info("Alternative routes calculation unavailable.")
                 else:
-                    st.warning("Road not found. Please check the road name and try again.")
+                    st.info("No alternative routes needed - road is clear.")
+            else:
+                st.warning("Road not found. Please check the road name and try again.")
+        elif road_name == "Search by typing...":
+            st.info("Please select a road from the dropdown or enter a road name.")
         else:
-            st.info("Nigerian roads database not available. Please use the basic search.")
-            road_name = st.text_input("Enter road name:", placeholder="e.g., Lagos-Ibadan Expressway")
-            if road_name:
-                st.info("Basic search functionality available. Enhanced features require Nigerian roads database.")
+            st.info("Please enter a road name to search.")
     
     elif search_option == "Location":
         st.subheader("Search by Location")
         
-        if ROADS_DB_AVAILABLE:
-            # Location inputs
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                states = nigerian_roads_db.get_states()
-                state = st.selectbox("Select State:", states)
-            
-            with col2:
-                if state:
-                    lgas = nigerian_roads_db.get_local_governments(state)
-                    lga = st.selectbox("Local Government Area:", ["All LGAs"] + lgas)
-                else:
-                    lga = st.selectbox("Local Government Area:", ["Select State First"])
-            
-            if state:
-                # Get roads in the selected state
-                roads_in_state = nigerian_roads_db.get_major_roads(state)
+        if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+            try:
+                # Location inputs
+                col1, col2 = st.columns(2)
                 
-                if roads_in_state:
-                    st.success(f"Found {len(roads_in_state)} major roads in {state}")
-                    
-                    for road in roads_in_state:
-                        with st.expander(f"🛣️ {road['name']} - {road['type']}"):
-                            col1, col2 = st.columns(2)
+                with col1:
+                    states = nigerian_roads_db.get_states()
+                    if states and isinstance(states, list):
+                        state = st.selectbox("Select State:", states)
+                    else:
+                        st.error("⚠️ Unable to retrieve states from database")
+                        state = None
+                
+                with col2:
+                    if state:
+                        try:
+                            lgas = nigerian_roads_db.get_local_governments(state)
+                            if lgas and isinstance(lgas, list):
+                                lga = st.selectbox("Local Government Area:", ["All LGAs"] + lgas)
+                            else:
+                                lga = st.selectbox("Local Government Area:", ["No LGAs available"])
+                        except Exception as e:
+                            st.error(f"⚠️ Error retrieving LGAs: {str(e)}")
+                            lga = st.selectbox("Local Government Area:", ["Error loading LGAs"])
+                    else:
+                        lga = st.selectbox("Local Government Area:", ["Select State First"])
+                
+                if state:
+                    # Get roads in the selected state
+                    try:
+                        roads_in_state = nigerian_roads_db.get_major_roads(state)
+                        
+                        if roads_in_state and isinstance(roads_in_state, list):
+                            st.success(f"Found {len(roads_in_state)} major roads in {state}")
                             
-                            with col1:
-                                st.write(f"**Length:** {road['length_km']} km")
-                                st.write(f"**Status:** {road['status']}")
-                                st.write(f"**Risk Factors:** {', '.join(road['risk_factors'])}")
-                            
-                            with col2:
-                                # Get recent risks for this road
-                                recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road['road_id'])
-                                st.write(f"**Recent Risks:** {len(recent_risks)}")
-                                
-                                if recent_risks:
-                                    st.write("**Latest Issues:**")
-                                    for risk in recent_risks[:3]:  # Show last 3 risks
-                                        st.markdown(f"""
-                                        <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0;">
-                                            <p><strong>{risk.get('risk_type', 'Unknown')}</strong> - {risk.get('description', 'No description')[:100]}...</p>
-                                            <p style="font-size: 0.8em; color: #6c757d;">{risk.get('reported_at', 'Unknown')}</p>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                else:
-                                    st.info("✅ No recent risks reported.")
-                else:
-                    st.info(f"No major roads found in {state}.")
+                            for road in roads_in_state:
+                                with st.expander(f"🛣️ {road['name']} - {road['type']}"):
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.write(f"**Length:** {road['length_km']} km")
+                                        st.write(f"**Status:** {road['status']}")
+                                        st.write(f"**Risk Factors:** {', '.join(road['risk_factors'])}")
+                                    
+                                    with col2:
+                                        # Get recent risks for this road
+                                        try:
+                                            recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road['road_id'])
+                                            st.write(f"**Recent Risks:** {len(recent_risks) if recent_risks else 0}")
+                                            
+                                            if recent_risks:
+                                                st.write("**Latest Issues:**")
+                                                for risk in recent_risks[:3]:  # Show last 3 risks
+                                                    st.markdown(f"""
+                                                    <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0;">
+                                                        <p><strong>{risk.get('risk_type', 'Unknown')}</strong> - {risk.get('description', 'No description')[:100]}...</p>
+                                                        <p style="font-size: 0.8em; color: #6c757d;">{risk.get('reported_at', 'Unknown')}</p>
+                                                    </div>
+                                                    """, unsafe_allow_html=True)
+                                            else:
+                                                st.info("✅ No recent risks reported.")
+                                        except Exception as e:
+                                            st.error(f"⚠️ Error retrieving risks for {road['name']}: {str(e)}")
+                                            st.info("Risk information unavailable for this road.")
+                        else:
+                            st.info(f"No major roads found in {state}.")
+                    except Exception as e:
+                        st.error(f"⚠️ Error retrieving roads for {state}: {str(e)}")
+                        st.info("Road information unavailable. Please try again later.")
+            except Exception as e:
+                st.error(f"⚠️ Error accessing Nigerian roads database: {str(e)}")
+                st.info("Location search unavailable. Please try again later.")
         else:
             st.info("Nigerian roads database not available for location search.")
+            st.info("Please use the basic search or contact support for enhanced features.")
     
     else:  # Browse by State
         st.subheader("Browse by State")
         
-        if ROADS_DB_AVAILABLE:
-            states = nigerian_roads_db.get_states()
-            selected_state = st.selectbox("Select State to Browse:", states)
-            
-            if selected_state:
-                # Get summary for the state
-                state_stats = nigerian_roads_db.get_road_statistics(selected_state)
-                
-                st.success(f"Road Network Summary for {selected_state}")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("Major Roads", state_stats.get('major_roads', 0))
-                
-                with col2:
-                    st.metric("Total Risks (24h)", state_stats.get('total_risks', 0))
-                
-                with col3:
-                    st.metric("Total Conditions (3m)", state_stats.get('total_conditions', 0))
-                
-                with col4:
-                    st.metric("Active LGAs", state_stats.get('active_lgas', 0))
-                
-                # List major roads in the state
-                st.subheader("Major Roads")
-                roads_in_state = nigerian_roads_db.get_major_roads(selected_state)
-                
-                if roads_in_state:
-                    for road in roads_in_state:
-                        with st.expander(f"🛣️ {road['name']} - {road['status']}"):
-                            col1, col2 = st.columns(2)
+        if ROADS_DB_AVAILABLE and nigerian_roads_db is not None:
+            try:
+                states = nigerian_roads_db.get_states()
+                if states and isinstance(states, list):
+                    selected_state = st.selectbox("Select State to Browse:", states)
+                    
+                    if selected_state:
+                        try:
+                            # Get summary for the state
+                            state_stats = nigerian_roads_db.get_road_statistics(selected_state)
+                            
+                            st.success(f"Road Network Summary for {selected_state}")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
                             
                             with col1:
-                                st.write(f"**Type:** {road['type']}")
-                                st.write(f"**Length:** {road['length_km']} km")
-                                st.write(f"**Risk Factors:** {', '.join(road['risk_factors'])}")
+                                st.metric("Major Roads", state_stats.get('major_roads', 0) if state_stats else 0)
                             
                             with col2:
-                                # Get recent risks for this road
-                                recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road['road_id'])
-                                st.write(f"**Recent Risks:** {len(recent_risks)}")
-                                
-                                if recent_risks:
-                                    st.write("**Latest Issues:**")
-                                    for risk in recent_risks[:2]:  # Show last 2 risks
-                                        st.markdown(f"""
-                                        <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0;">
-                                            <p><strong>{risk.get('risk_type', 'Unknown')}</strong> - {risk.get('description', 'No description')[:80]}...</p>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                else:
-                                    st.info("✅ No recent risks reported.")
+                                st.metric("Total Risks (24h)", state_stats.get('total_risks', 0) if state_stats else 0)
+                            
+                            with col3:
+                                st.metric("Total Conditions (3m)", state_stats.get('total_conditions', 0) if state_stats else 0)
+                            
+                            with col4:
+                                st.metric("Active LGAs", state_stats.get('active_lgas', 0) if state_stats else 0)
+                            
+                            # List major roads in the state
+                            st.subheader("Major Roads")
+                            roads_in_state = nigerian_roads_db.get_major_roads(selected_state)
+                            
+                            if roads_in_state and isinstance(roads_in_state, list):
+                                for road in roads_in_state:
+                                    with st.expander(f"🛣️ {road['name']} - {road['status']}"):
+                                        col1, col2 = st.columns(2)
+                                        
+                                        with col1:
+                                            st.write(f"**Type:** {road['type']}")
+                                            st.write(f"**Length:** {road['length_km']} km")
+                                            st.write(f"**Risk Factors:** {', '.join(road['risk_factors'])}")
+                                        
+                                        with col2:
+                                            # Get recent risks for this road
+                                            try:
+                                                recent_risks = nigerian_roads_db.get_road_risks(hours=168, road_id=road['road_id'])
+                                                st.write(f"**Recent Risks:** {len(recent_risks) if recent_risks else 0}")
+                                                
+                                                if recent_risks:
+                                                    st.write("**Latest Issues:**")
+                                                    for risk in recent_risks[:2]:  # Show last 2 risks
+                                                        st.markdown(f"""
+                                                        <div style="background-color: #f8f9fa; padding: 0.5rem; border-radius: 5px; margin: 0.5rem 0;">
+                                                            <p><strong>{risk.get('risk_type', 'Unknown')}</strong> - {risk.get('description', 'No description')[:80]}...</p>
+                                                        </div>
+                                                        """, unsafe_allow_html=True)
+                                                else:
+                                                    st.info("✅ No recent risks reported.")
+                                            except Exception as e:
+                                                st.error(f"⚠️ Error retrieving risks for {road['name']}: {str(e)}")
+                                                st.info("Risk information unavailable for this road.")
+                            else:
+                                st.info(f"No major roads found in {selected_state}.")
+                        except Exception as e:
+                            st.error(f"⚠️ Error retrieving state statistics: {str(e)}")
+                            st.info("State information unavailable. Please try again later.")
                 else:
-                    st.info(f"No major roads found in {selected_state}.")
+                    st.error("⚠️ Unable to retrieve states from database")
+                    st.info("State browsing unavailable. Please try again later.")
+            except Exception as e:
+                st.error(f"⚠️ Error accessing Nigerian roads database: {str(e)}")
+                st.info("State browsing unavailable. Please try again later.")
         else:
             st.info("Nigerian roads database not available for state browsing.")
+            st.info("Please use the basic search or contact support for enhanced features.")
     
     # General road safety tips
     st.subheader("🛡️ General Road Safety Tips")

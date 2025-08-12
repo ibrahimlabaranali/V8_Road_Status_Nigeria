@@ -472,14 +472,15 @@ class NigerianRoadsDatabase:
     def get_major_roads(self, state: str = None) -> List[Dict]:
         """Get major roads, optionally filtered by state"""
         if state:
-            return {k: v for k, v in self.major_roads.items() if state in v['states']}
-        return self.major_roads
+            filtered_roads = {k: v for k, v in self.major_roads.items() if state in v['states']}
+            return [{"road_id": k, **v} for k, v in filtered_roads.items()]
+        return [{"road_id": k, **v} for k, v in self.major_roads.items()]
     
     def get_road_by_name(self, road_name: str) -> Optional[Dict]:
         """Get road information by name"""
         for road_code, road_data in self.major_roads.items():
             if road_name.lower() in road_data['name'].lower():
-                return {**road_data, 'code': road_code}
+                return {**road_data, 'road_id': road_code, 'code': road_code}
         return None
     
     def get_risk_categories(self) -> Dict:
@@ -705,10 +706,26 @@ class NigerianRoadsDatabase:
             
             conn.close()
             
+            # Get major roads count for the state
+            if state:
+                major_roads_count = len([r for r in self.major_roads.values() if state in r['states']])
+            else:
+                major_roads_count = len(self.major_roads)
+            
+            # Get active LGAs count
+            if state:
+                active_lgas_count = len(self.states.get(state, []))
+            else:
+                active_lgas_count = sum(len(lgas) for lgas in self.states.values())
+            
             return {
                 'risks_24h': risks_24h,
                 'risks_7d': risks_7d,
                 'conditions_3m': conditions_3m,
+                'total_risks': risks_7d,  # Alias for compatibility
+                'total_conditions': conditions_3m,  # Alias for compatibility
+                'major_roads': major_roads_count,
+                'active_lgas': active_lgas_count,
                 'risk_types': risk_types,
                 'top_states': top_states
             }

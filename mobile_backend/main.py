@@ -234,6 +234,20 @@ class StatsResponse(BaseModel):
     total_users: int
     active_reports_24h: int
 
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    state: Optional[str] = None
+    lga: Optional[str] = None
+
+class PasswordUpdate(BaseModel):
+    current_password: str
+    new_password: str
+
+class ReportVerification(BaseModel):
+    status: str  # 'verified', 'disputed', 'resolved'
+    notes: Optional[str] = None
+
 # Database utilities
 @contextmanager
 def get_db_connection():
@@ -2106,6 +2120,369 @@ async def get_app_status():
         "database_status": "healthy",
         "api_status": "healthy"
     }
+
+# Additional required endpoints for driver dashboard
+@app.get(f"{API_PREFIX}/me")
+async def get_my_profile(current_user: User = Depends(get_current_user)):
+    """Get current user profile (alias for /user/profile)"""
+    return await get_user_profile(current_user.id)
+
+@app.patch(f"{API_PREFIX}/me")
+async def update_my_profile(
+    profile_update: UserUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update current user profile (alias for /user/profile)"""
+    return await update_user_profile(profile_update, current_user.id)
+
+@app.patch(f"{API_PREFIX}/me/password")
+async def update_my_password(
+    password_update: PasswordUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update current user password"""
+    try:
+        if not pwd_context.verify(password_update.current_password, current_user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect"
+            )
+        
+        new_hashed_password = pwd_context.hash(password_update.new_password)
+        
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET hashed_password = ? WHERE id = ?",
+                (new_hashed_password, current_user.id)
+            )
+            conn.commit()
+        
+        return {"success": True, "message": "Password updated successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Password update error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password"
+        )
+
+@app.get(f"{API_PREFIX}/taxonomy/categories")
+async def get_risk_categories():
+    """Get all risk categories"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT risk_type FROM risk_reports ORDER BY risk_type")
+            categories = [row[0] for row in cursor.fetchall()]
+            
+            return {
+                "success": True,
+                "categories": categories,
+                "total": len(categories)
+            }
+    except Exception as e:
+        logger.error(f"Categories error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get risk categories"
+        )
+
+@app.get(f"{API_PREFIX}/taxonomy/subtypes")
+async def get_risk_subtypes(category: str):
+    """Get risk subtypes for a specific category"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT risk_subtype FROM risk_reports WHERE risk_type = ? ORDER BY risk_subtype",
+                (category,)
+            )
+            subtypes = [row[0] for row in cursor.fetchall()]
+            
+            return {
+                "success": True,
+                "category": category,
+                "subtypes": subtypes,
+                "total": len(subtypes)
+            }
+    except Exception as e:
+        logger.error(f"Subtypes error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get risk subtypes"
+        )
+
+@app.get(f"{API_PREFIX}/geo/states-lgas")
+async def get_states_and_lgas():
+    """Get all states and their LGAs"""
+    try:
+        # Nigerian states and sample LGAs
+        states_lgas = {
+            "Lagos": ["Ikeja", "Victoria Island", "Lekki", "Ikorodu", "Oshodi", "Surulere"],
+            "Kano": ["Municipal", "Fagge", "Dala", "Gwale", "Tarauni", "Ungogo"],
+            "Rivers": ["Port Harcourt", "Okrika", "Eleme", "Ikwerre", "Emohua", "Obio-Akpor"],
+            "Kaduna": ["Kaduna North", "Kaduna South", "Igabi", "Chikun", "Giwa", "Sabon Gari"],
+            "Katsina": ["Katsina", "Daura", "Funtua", "Malumfashi", "Kankia", "Mani"],
+            "Oyo": ["Ibadan North", "Ibadan South", "Ibadan North East", "Ibadan South East", "Ibadan North West", "Ibadan South West"],
+            "Imo": ["Owerri Municipal", "Owerri North", "Owerri West", "Okigwe", "Orlu", "Ngor Okpala"],
+            "Borno": ["Maiduguri", "Jere", "Konduga", "Bama", "Gwoza", "Dikwa"],
+            "Anambra": ["Awka North", "Awka South", "Onitsha North", "Onitsha South", "Nnewi North", "Nnewi South"],
+            "Sokoto": ["Sokoto North", "Sokoto South", "Wamako", "Dange Shuni", "Tureta", "Gudu"]
+        }
+        
+        return {
+            "success": True,
+            "states_lgas": states_lgas,
+            "total_states": len(states_lgas)
+        }
+    except Exception as e:
+        logger.error(f"States-LGAs error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get states and LGAs"
+        )
+
+@app.get(f"{API_PREFIX}/roads/status")
+async def get_roads_status(state: str = None, lga: str = None):
+    """Get road status information"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            query = """
+                SELECT 
+                    r.risk_type,
+                    r.risk_subtype,
+                    r.severity,
+                    r.location,
+                    r.state,
+                    r.lga,
+                    r.created_at,
+                    COUNT(*) as report_count
+                FROM risk_reports r
+                WHERE r.status = 'verified'
+            """
+            params = []
+            
+            if state:
+                query += " AND r.state = ?"
+                params.append(state)
+            
+            if lga:
+                query += " AND r.lga = ?"
+                params.append(lga)
+            
+            query += " GROUP BY r.risk_type, r.risk_subtype, r.severity, r.location, r.state, r.lga"
+            query += " ORDER BY r.created_at DESC"
+            
+            cursor.execute(query, params)
+            roads_status = cursor.fetchall()
+            
+            return {
+                "success": True,
+                "roads_status": roads_status,
+                "total_roads": len(roads_status),
+                "filters": {"state": state, "lga": lga}
+            }
+    except Exception as e:
+        logger.error(f"Roads status error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get roads status"
+        )
+
+@app.get(f"{API_PREFIX}/dashboard")
+async def get_dashboard_data(current_user: User = Depends(get_current_user)):
+    """Get dashboard data for the current user"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # User's report statistics
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_reports,
+                    COUNT(CASE WHEN status = 'verified' THEN 1 END) as verified_reports,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_reports,
+                    COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_reports
+                FROM risk_reports 
+                WHERE user_id = ?
+            """, (current_user.id,))
+            
+            user_stats = cursor.fetchone()
+            
+            # Recent reports
+            cursor.execute("""
+                SELECT id, risk_type, risk_subtype, severity, location, created_at, status
+                FROM risk_reports 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            """, (current_user.id,))
+            
+            recent_reports = cursor.fetchall()
+            
+            # Community statistics
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_community_reports,
+                    COUNT(CASE WHEN status = 'verified' THEN 1 END) as total_verified
+                FROM risk_reports
+            """)
+            
+            community_stats = cursor.fetchone()
+            
+            return {
+                "success": True,
+                "user_stats": {
+                    "total_reports": user_stats[0],
+                    "verified_reports": user_stats[1],
+                    "pending_reports": user_stats[2],
+                    "resolved_reports": user_stats[3]
+                },
+                "recent_reports": recent_reports,
+                "community_stats": {
+                    "total_reports": community_stats[0],
+                    "total_verified": community_stats[1]
+                }
+            }
+    except Exception as e:
+        logger.error(f"Dashboard error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get dashboard data"
+        )
+
+@app.get(f"{API_PREFIX}/feeds/news")
+async def get_news_feeds(category: str = None, limit: int = 20):
+    """Get news feeds related to road safety and transportation"""
+    try:
+        # Mock news data - in production, this would come from a news API
+        news_feeds = [
+            {
+                "id": 1,
+                "title": "New Road Safety Measures Implemented in Lagos",
+                "summary": "Lagos State Government introduces enhanced road safety protocols...",
+                "category": "Road Safety",
+                "source": "Lagos State News",
+                "published_at": "2024-01-15T10:00:00Z",
+                "url": "https://example.com/news/1"
+            },
+            {
+                "id": 2,
+                "title": "Traffic Management System Upgrade",
+                "summary": "Federal Road Safety Corps announces new traffic management system...",
+                "category": "Traffic Management",
+                "source": "FRSC News",
+                "published_at": "2024-01-14T15:30:00Z",
+                "url": "https://example.com/news/2"
+            }
+        ]
+        
+        if category:
+            news_feeds = [news for news in news_feeds if news["category"] == category]
+        
+        return {
+            "success": True,
+            "news_feeds": news_feeds[:limit],
+            "total": len(news_feeds),
+            "category": category
+        }
+    except Exception as e:
+        logger.error(f"News feeds error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get news feeds"
+        )
+
+@app.get(f"{API_PREFIX}/feeds/social")
+async def get_social_feeds(platform: str = None, limit: int = 20):
+    """Get social media feeds related to road conditions"""
+    try:
+        # Mock social data - in production, this would come from social media APIs
+        social_feeds = [
+            {
+                "id": 1,
+                "platform": "Twitter",
+                "username": "@RoadSafetyNG",
+                "content": "Traffic alert: Heavy congestion on Lagos-Ibadan Expressway...",
+                "posted_at": "2024-01-15T09:00:00Z",
+                "engagement": {"likes": 45, "retweets": 12, "replies": 8}
+            },
+            {
+                "id": 2,
+                "platform": "Facebook",
+                "username": "Nigerian Road Safety",
+                "content": "Update: Road construction on Third Mainland Bridge...",
+                "posted_at": "2024-01-15T08:30:00Z",
+                "engagement": {"likes": 23, "shares": 7, "comments": 5}
+            }
+        ]
+        
+        if platform:
+            social_feeds = [feed for feed in social_feeds if feed["platform"] == platform]
+        
+        return {
+            "success": True,
+            "social_feeds": social_feeds[:limit],
+            "total": len(social_feeds),
+            "platform": platform
+        }
+    except Exception as e:
+        logger.error(f"Social feeds error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get social feeds"
+        )
+
+@app.post(f"{API_PREFIX}/reports/{report_id}/verify")
+async def verify_report(
+    report_id: int,
+    verification: ReportVerification,
+    current_user: User = Depends(get_current_user)
+):
+    """Verify or dispute a report"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Check if report exists
+            cursor.execute("SELECT id, user_id, status FROM risk_reports WHERE id = ?", (report_id,))
+            report = cursor.fetchone()
+            
+            if not report:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Report not found"
+                )
+            
+            # Update report status
+            cursor.execute("""
+                UPDATE risk_reports 
+                SET status = ?, verified_by = ?, verified_at = ?, verification_notes = ?
+                WHERE id = ?
+            """, (verification.status, current_user.id, datetime.utcnow(), verification.notes, report_id))
+            
+            conn.commit()
+            
+            return {
+                "success": True,
+                "message": f"Report {verification.status} successfully",
+                "report_id": report_id,
+                "status": verification.status
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Report verification error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify report"
+        )
 
 # Initialize database on startup
 @app.on_event("startup")

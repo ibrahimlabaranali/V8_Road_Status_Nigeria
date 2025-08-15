@@ -1,3 +1,8 @@
+# Environment variables
+.env
+.env.local
+.env.production
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,61 +24,56 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Virtual environments
 venv/
 env/
 ENV/
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Environment variables
-.env
-.env.local
-.env.production
-
-# Encryption keys
-*.key
-*.pem
-
-# Logs
-*.log
-logs/
-
-# Uploads
-uploads/
-temp/
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# Streamlit
-.streamlit/secrets.toml
+# Logs
+*.log
+logs/
+log/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
 # Temporary files
 *.tmp
 *.temp
+temp/
+tmp/
 
-# PWA files
-manifest.json
-service-worker.js
-static/icons/
+# Uploads
+uploads/
+media/
 
-# Backup files
-*.bak
-*.backup
+# Cache
+.cache/
+.pytest_cache/
 
-# Test coverage
+# Coverage
 .coverage
 htmlcov/
 
@@ -86,8 +86,8 @@ htmlcov/
 # pipenv
 Pipfile.lock
 
-# PEP 582
-__pypackages__/
+# Poetry
+poetry.lock
 
 # Celery
 celerybeat-schedule
@@ -114,8 +114,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/ 
+# Render specific
+.render-buildlogs/ 

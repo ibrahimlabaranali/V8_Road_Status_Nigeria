@@ -763,6 +763,31 @@ def init_database():
             )
         ''')
         
+        # Login attempts table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier TEXT NOT NULL,
+                user_ip TEXT,
+                success BOOLEAN DEFAULT FALSE,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Account lockouts table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier TEXT NOT NULL,
+                user_ip TEXT,
+                lockout_reason TEXT,
+                lockout_end TIMESTAMP NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         return True
@@ -2034,14 +2059,28 @@ def main():
     else:
         # No user is logged in - show public access options
         st.sidebar.info("🔓 Public Access - Limited Features Available")
-        st.sidebar.markdown("""
-        **Available for everyone:**
-        - 🛣️ **Check road status** (Primary feature)
-        - 📰 View social media reports
-        - 📰 View news reports
-        - 📖 Read about the system
         
-        **Sign up for full access:**
+        # Convert static text to clickable navigation
+        st.sidebar.markdown("**Available for everyone:**")
+        
+        if st.sidebar.button("🛣️ Check Road Status", key="nav_road_status", use_container_width=True):
+            st.session_state.public_page = "Road Status Checker"
+            st.rerun()
+        
+        if st.sidebar.button("📰 View Social Media Reports", key="nav_social", use_container_width=True):
+            st.session_state.public_page = "Social Media Reports"
+            st.rerun()
+        
+        if st.sidebar.button("📰 View News Reports", key="nav_news", use_container_width=True):
+            st.session_state.public_page = "News Reports"
+            st.rerun()
+        
+        if st.sidebar.button("📖 Read About System", key="nav_about", use_container_width=True):
+            st.session_state.public_page = "About"
+            st.rerun()
+        
+        st.sidebar.markdown("**Sign up for full access:**")
+        st.sidebar.markdown("""
         - 📋 View verified reports
         - ✍️ Submit reports
         - 👍 Upvote and comment on reports
@@ -2049,10 +2088,16 @@ def main():
         - 🔔 Get real-time notifications
         """)
         
+        # Main navigation dropdown
         page = st.sidebar.selectbox(
             "Choose a page:",
             ["Road Status Checker", "Critical Risk Monitor", "Public Reports", "Social Media Reports", "News Reports", "About", "Login", "Admin Login", "Register", "Reset Password"]
         )
+        
+        # Handle public page navigation
+        if 'public_page' in st.session_state:
+            page = st.session_state.public_page
+            del st.session_state.public_page
         
         if page == "Road Status Checker":
             show_road_status_checker()
@@ -5817,6 +5862,354 @@ def get_alternative_routes(road_name: str, state: str) -> list:
     }
     
     return alternatives.get(road_name, [])
+
+# Missing page functions
+def show_road_status_checker():
+    """Show the road status checker page"""
+    st.header("🛣️ Road Status Checker")
+    st.info("Check the current status of major roads across Nigeria.")
+    
+    # Road selection
+    road_name = st.selectbox(
+        "Select Road:",
+        ["Lagos-Ibadan Expressway", "Third Mainland Bridge", "Lekki-Epe Expressway", 
+         "Victoria Island Road", "Ikorodu Road", "Ahmadu Bello Way", 
+         "Port Harcourt-Aba Road", "Kano-Kaduna Expressway", "Enugu-Onitsha Expressway", 
+         "Calabar-Uyo Road"]
+    )
+    
+    state = st.selectbox(
+        "Select State:",
+        ["Lagos", "Ogun", "Oyo", "Abuja FCT", "Rivers", "Kano", "Kaduna", "Enugu", "Anambra", "Cross River"]
+    )
+    
+    if st.button("🔍 Check Road Status", type="primary"):
+        # Simulate road status check
+        with st.spinner("Checking road status..."):
+            time.sleep(1)
+            
+            # Get road status (simulated)
+            status = "Safe"  # This would come from your database
+            last_updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            st.success(f"✅ Road Status: {status}")
+            st.info(f"Last Updated: {last_updated}")
+            
+            # Show safety advice
+            st.subheader("🛡️ Safety Advice")
+            st.markdown(get_safety_advice(status))
+            
+            # Show alternative routes
+            alternatives = get_alternative_routes(road_name, state)
+            if alternatives:
+                st.subheader("🔄 Alternative Routes")
+                for alt in alternatives:
+                    st.info(f"**{alt['name']}**: {alt['description']} ({alt['time']})")
+
+def show_risk_history():
+    """Show user's risk report history"""
+    st.header("📊 Risk History")
+    
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to view your risk history.")
+        return
+    
+    user_id = st.session_state.user['id']
+    reports = get_risk_reports(user_id=user_id)
+    
+    if reports:
+        st.success(f"Found {len(reports)} reports in your history")
+        
+        for report in reports:
+            with st.expander(f"📝 {report[1]} - {report[3]}", expanded=False):
+                st.markdown(f"""
+                **Risk Type:** {report[1]}
+                **Description:** {report[2]}
+                **Location:** {report[3]}
+                **Status:** {report[6]}
+                **Reported:** {get_time_ago(report[8])}
+                """)
+    else:
+        st.info("No reports found in your history.")
+
+def show_live_feeds():
+    """Show live feeds from social media and news"""
+    st.header("📡 Live Feeds")
+    st.info("Real-time updates from social media and news sources.")
+    
+    tab1, tab2 = st.tabs(["📱 Social Media", "📰 News"])
+    
+    with tab1:
+        st.subheader("📱 Social Media Updates")
+        social_data = fetch_social_media_feeds()
+        
+        if social_data:
+            for post in social_data:
+                with st.expander(f"📱 {post['platform']} - {post['username']}", expanded=False):
+                    st.markdown(f"""
+                    **Content:** {post['content']}
+                    **Location:** {post['location']}
+                    **Posted:** {post['posted_at']}
+                    **Followers:** {post['followers']}
+                    """)
+                    st.link_button("View Original", post['url'])
+        else:
+            st.warning("No social media updates available.")
+    
+    with tab2:
+        st.subheader("📰 News Updates")
+        news_data = fetch_nigerian_news()
+        
+        if news_data:
+            for news in news_data:
+                with st.expander(f"📰 {news['title']}", expanded=False):
+                    st.markdown(f"""
+                    **Description:** {news['description']}
+                    **Location:** {news['location']}
+                    **Source:** {news['source']}
+                    **Published:** {news['published_at']}
+                    """)
+                    st.link_button("Read Full Article", news['url'])
+        else:
+            st.warning("No news updates available.")
+
+def show_manage_reports():
+    """Show report management for users"""
+    st.header("📋 Manage Reports")
+    
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to manage reports.")
+        return
+    
+    user_id = st.session_state.user['id']
+    reports = get_risk_reports(user_id=user_id)
+    
+    if reports:
+        st.success(f"Found {len(reports)} reports to manage")
+        
+        for report in reports:
+            with st.expander(f"📝 {report[1]} - {report[3]}", expanded=False):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"""
+                    **Risk Type:** {report[1]}
+                    **Description:** {report[2]}
+                    **Location:** {report[3]}
+                    **Status:** {report[6]}
+                    **Reported:** {get_time_ago(report[8])}
+                    """)
+                
+                with col2:
+                    if report[6] == 'pending':
+                        if st.button("✅ Mark Resolved", key=f"resolve_{report[0]}"):
+                            if update_report_status(report[0], 'resolved'):
+                                st.success("Report marked as resolved!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update report status.")
+                    
+                    st.info(f"Confirmations: {report[7]}")
+
+def show_user_management():
+    """Show user management for regular users"""
+    st.header("👥 User Management")
+    
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to access user management.")
+        return
+    
+    if st.session_state.user.get('role') != 'Admin':
+        st.warning("Only administrators can access user management.")
+        return
+    
+    st.info("User management functionality for administrators.")
+    # This would show user management interface for admins
+
+def show_ai_advice_page():
+    """Show AI-powered safety advice"""
+    st.header("🤖 AI Safety Advice")
+    st.info("Get intelligent safety recommendations based on current road conditions.")
+    
+    # This would integrate with an AI service for safety advice
+    st.info("AI safety advice functionality coming soon!")
+
+def show_analytics_page():
+    """Show analytics dashboard"""
+    st.header("📊 Analytics Dashboard")
+    
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to view analytics.")
+        return
+    
+    # Get report statistics
+    stats = get_report_stats()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Reports", stats['total'])
+    
+    with col2:
+        st.metric("Pending", stats['pending'])
+    
+    with col3:
+        st.metric("Verified", stats['verified'])
+    
+    with col4:
+        st.metric("Resolved", stats['resolved'])
+    
+    # Show charts and graphs here
+    st.info("Advanced analytics and charts coming soon!")
+
+def show_security_page():
+    """Show security settings page"""
+    st.header("🔒 Security Settings")
+    
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to access security settings.")
+        return
+    
+    st.subheader("Password Management")
+    
+    with st.form("change_password"):
+        current_password = st.text_input("Current Password", type="password")
+        new_password = st.text_input("New Password", type="password")
+        confirm_password = st.text_input("Confirm New Password", type="password")
+        
+        if st.form_submit_button("Change Password"):
+            if new_password != confirm_password:
+                st.error("New passwords do not match!")
+            else:
+                st.success("Password change functionality coming soon!")
+
+def show_deployment_page():
+    """Show deployment and PWA information"""
+    st.header("🚀 Deployment & PWA")
+    st.info("Information about deploying the application and Progressive Web App features.")
+    
+    st.subheader("Deployment Options")
+    st.markdown("""
+    **Streamlit Cloud:**
+    - Free hosting for public apps
+    - Automatic deployments from GitHub
+    - Built-in CI/CD pipeline
+    
+    **Heroku:**
+    - Easy deployment with Git
+    - Free tier available
+    - Custom domain support
+    
+    **AWS/GCP/Azure:**
+    - Enterprise-grade hosting
+    - Scalable infrastructure
+    - Advanced security features
+    """)
+    
+    st.subheader("Progressive Web App Features")
+    st.markdown("""
+    - 📱 Install on mobile devices
+    - 🔄 Offline functionality
+    - 📲 Push notifications
+    - 🚀 Fast loading times
+    """)
+
+def show_moderation_panel():
+    """Show moderation panel for admins"""
+    st.header("🛡️ Moderation Panel")
+    st.info("Moderate user reports and content.")
+    
+    if not st.session_state.get('admin_logged_in'):
+        st.warning("Admin access required.")
+        return
+    
+    st.info("Moderation functionality coming soon!")
+
+def show_admin_user_management():
+    """Show admin user management"""
+    st.header("👥 Admin User Management")
+    st.info("Manage system users and permissions.")
+    
+    if not st.session_state.get('admin_logged_in'):
+        st.warning("Admin access required.")
+        return
+    
+    users = get_all_users()
+    
+    if users:
+        st.success(f"Found {len(users)} users")
+        
+        for user in users:
+            with st.expander(f"👤 {user[1]} ({user[4]})", expanded=False):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"""
+                    **Name:** {user[1]}
+                    **Phone:** {user[2]}
+                    **Email:** {user[3]}
+                    **Role:** {user[4]}
+                    **Created:** {user[6]}
+                    """)
+                
+                with col2:
+                    if user[4] != 'Admin':
+                        new_role = st.selectbox("Role", ["Public", "Driver", "Admin"], key=f"role_{user[0]}")
+                        if st.button("Update Role", key=f"update_{user[0]}"):
+                            if update_user_role(user[0], new_role, st.session_state.admin_user['id'], st.session_state.admin_user['full_name']):
+                                st.success("Role updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update role.")
+
+def show_admin_logs():
+    """Show admin logs"""
+    st.header("📋 Admin Logs")
+    st.info("View system administration logs.")
+    
+    if not st.session_state.get('admin_logged_in'):
+        st.warning("Admin access required.")
+        return
+    
+    logs = get_admin_logs(limit=50)
+    
+    if logs:
+        st.success(f"Found {len(logs)} log entries")
+        
+        for log in logs:
+            with st.expander(f"📝 {log[2]} - {log[3]}", expanded=False):
+                st.markdown(f"""
+                **Action:** {log[2]}
+                **Target:** {log[3]} {log[4] if log[4] else ''}
+                **Details:** {log[5]}
+                **Admin:** {log[7]}
+                **Time:** {log[6]}
+                """)
+    else:
+        st.info("No admin logs found.")
+
+def show_config_panel():
+    """Show configuration panel for admins"""
+    st.header("⚙️ Configuration Panel")
+    st.info("System configuration and settings.")
+    
+    if not st.session_state.get('admin_logged_in'):
+        st.warning("Admin access required.")
+        return
+    
+    st.subheader("System Settings")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("Session Timeout", f"{SECURITY_CONFIG['session_timeout_minutes']} minutes")
+        st.metric("Max Login Attempts", SECURITY_CONFIG['max_login_attempts'])
+        st.metric("Lockout Duration", f"{SECURITY_CONFIG['lockout_duration_minutes']} minutes")
+    
+    with col2:
+        st.metric("Password Min Length", SECURITY_CONFIG['password_min_length'])
+        st.metric("Rate Limit Window", f"{SECURITY_CONFIG['rate_limit_window_minutes']} minutes")
+        st.metric("Max Requests", SECURITY_CONFIG['max_requests_per_window'])
 
 if __name__ == "__main__":
     main() 

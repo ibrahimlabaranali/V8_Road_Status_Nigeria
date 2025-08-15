@@ -5863,6 +5863,73 @@ def get_alternative_routes(road_name: str, state: str) -> list:
     
     return alternatives.get(road_name, [])
 
+def get_safety_advice(status: str) -> str:
+    """Generate safety advice based on road status"""
+    if status.lower() == "safe":
+        return """
+        ✅ **SAFE TO TRAVEL - NORMAL PRECAUTIONS**
+        
+        • **Standard Safety:**
+          - Follow normal traffic rules
+          - Stay alert while driving
+          - Keep emergency contacts available
+          - Monitor for any changes in conditions
+        
+        • **General Tips:**
+          - Maintain your vehicle properly
+          - Have basic emergency supplies
+          - Know your route before traveling
+          - Stay informed about weather conditions
+        """
+    elif status.lower() == "caution":
+        return """
+        ⚠️ **EXERCISE CAUTION - INCREASED RISK**
+        
+        • **Safety Measures:**
+          - Reduce speed and increase following distance
+          - Be extra vigilant for hazards
+          - Avoid unnecessary travel if possible
+          - Monitor local traffic updates
+        
+        • **Emergency Preparedness:**
+          - Ensure your phone is charged
+          - Have emergency contacts readily available
+          - Consider alternative routes
+          - Travel with a companion if possible
+        """
+    elif status.lower() == "dangerous":
+        return """
+        🚨 **DANGEROUS CONDITIONS - AVOID TRAVEL**
+        
+        • **Immediate Actions:**
+          - Avoid this route completely
+          - Seek alternative transportation
+          - Stay informed about updates
+          - Follow official advisories
+        
+        • **Safety Priority:**
+          - Your safety is paramount
+          - Wait for conditions to improve
+          - Use official information sources
+          - Contact emergency services if needed
+        """
+    else:
+        return """
+        ℹ️ **STATUS UNKNOWN - PROCEED WITH CAUTION**
+        
+        • **Recommended Actions:**
+          - Gather more information before traveling
+          - Check multiple sources for updates
+          - Consider postponing travel
+          - Have backup plans ready
+        
+        • **Safety First:**
+          - When in doubt, err on the side of caution
+          - Stay informed about local conditions
+          - Follow official guidance
+          - Prioritize safety over convenience
+        """
+
 # Missing page functions
 def show_road_status_checker():
     """Show the road status checker page"""

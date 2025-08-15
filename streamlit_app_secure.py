@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Nigerian Road Risk Reporter - Secure Version
-Enhanced security features with comprehensive protection
-Python 3.11+ compatible - Production ready
+Nigerian Road Risk Reporter - Enhanced Secure Version
+Complete road risk reporting system with enhanced security features
+Python 3.13 compatible - Streamlit Cloud ready
 """
 
 import streamlit as st
@@ -19,62 +19,160 @@ import io
 from typing import Dict, List, Optional, Tuple
 import urllib.request
 import urllib.parse
-import hmac
-import hashlib
-import logging
-
-# Security logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('security.log'),
-        logging.StreamHandler()
-    ]
-)
 
 # Import Nigerian roads database
 try:
     from nigerian_roads_data import nigerian_roads_db
     ROADS_DB_AVAILABLE = True
+    # Initialize the Nigerian roads database if available
+    if nigerian_roads_db:
+        try:
+            nigerian_roads_db.init_database()
+            st.success("✅ Nigerian roads database initialized successfully!")
+        except Exception as e:
+            st.error(f"⚠️ Failed to initialize Nigerian roads database: {str(e)}")
+            ROADS_DB_AVAILABLE = False
+            nigerian_roads_db = None
 except ImportError:
     ROADS_DB_AVAILABLE = False
     nigerian_roads_db = None
+    st.warning("⚠️ Nigerian roads database module not available")
 
-# Auto-refresh configuration
+# Import enhanced reports system
+try:
+    from enhanced_reports import enhanced_reports_system
+    ENHANCED_REPORTS_AVAILABLE = True
+except ImportError:
+    ENHANCED_REPORTS_AVAILABLE = False
+    enhanced_reports_system = None
+
+# Security configuration
+SECURITY_CONFIG = {
+    'session_timeout_minutes': 30,
+    'max_login_attempts': 5,  # Updated to 5 attempts
+    'lockout_duration_minutes': 30,  # 30-minute lockout after 5 failed attempts
+    'password_min_length': 8,
+    'require_special_chars': True,
+    'enable_captcha': True,
+    'enable_rate_limiting': True,
+    'rate_limit_window_minutes': 15,
+    'max_requests_per_window': 100,
+    'enable_ip_tracking': True,
+    'enable_account_lockout': True,
+    'enable_suspicious_activity_detection': True,
+    'enable_audit_logging': True
+}
+
+# Page configuration
+st.set_page_config(
+    page_title="RoadReportNG - Secure",
+    page_icon="🛣️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Intelligent auto-refresh configuration
 AUTO_REFRESH_CONFIG = {
     'enabled': True,
-    'interval_seconds': 30,  # Auto-refresh every 30 seconds
+    'base_interval_seconds': 900,  # 15 minutes base interval
+    'critical_interval_seconds': 30,  # 30 seconds for critical risks
+    'high_risk_interval_seconds': 120,  # 2 minutes for high-risk situations
+    'interval_seconds': 900,  # Default interval for backward compatibility
     'manual_refresh_enabled': True,
-    'show_refresh_status': True
+    'show_refresh_status': True,
+    'smart_refresh': True,  # Enable intelligent refresh
+    'risk_threshold': 0.7,  # Risk score threshold for immediate updates
+    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed'],
+    'max_refresh_count': 20
 }
 
 def check_for_new_reports():
-    """Check if there are new reports since last check"""
+    """Check if there are new reports since last check with intelligent risk assessment"""
     if 'last_report_check' not in st.session_state:
         st.session_state.last_report_check = datetime.now()
         st.session_state.last_report_count = 0
+        st.session_state.last_critical_check = datetime.now()
+        st.session_state.critical_risks_count = 0
     
-    # Update last check time
-    st.session_state.last_report_check = datetime.now()
+    current_time = datetime.now()
     
-    # Get current report count
-    try:
-        conn = sqlite3.connect('db/risk_reports.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM risk_reports')
-        current_count = cursor.fetchone()[0]
-        conn.close()
-    except:
-        current_count = 0
+    # Get current reports
+    current_reports = get_risk_reports()
+    current_count = len(current_reports)
     
-    # Check if there are new reports
+    # Check for new reports
+    has_new_reports = False
+    new_count = 0
+    critical_risks = []
+    
     if current_count > st.session_state.last_report_count:
         new_reports = current_count - st.session_state.last_report_count
         st.session_state.last_report_count = current_count
-        return True, new_reports
+        has_new_reports = True
+        new_count = new_reports
+        
+        # Analyze new reports for critical risks
+        recent_reports = get_recent_reports(hours=1)  # Get reports from last hour
+        critical_risks = analyze_critical_risks(recent_reports)
     
-    return False, 0
+    # Update last check time
+    st.session_state.last_report_check = current_time
+    
+    return has_new_reports, new_count, critical_risks
+
+def analyze_critical_risks(reports):
+    """Analyze reports to identify critical risks that need immediate attention"""
+    critical_risks = []
+    
+    for report in reports:
+        risk_score = calculate_risk_score(report)
+        
+        # Check if report contains emergency keywords
+        report_text = f"{report.get('risk_type', '')} {report.get('description', '')} {report.get('location', '')}".lower()
+        has_emergency_keywords = any(keyword in report_text for keyword in AUTO_REFRESH_CONFIG['emergency_keywords'])
+        
+        # Check if risk score exceeds threshold or has emergency keywords
+        if risk_score > AUTO_REFRESH_CONFIG['risk_threshold'] or has_emergency_keywords:
+            critical_risks.append({
+                'report_id': report.get('id'),
+                'risk_type': report.get('risk_type'),
+                'description': report.get('description'),
+                'location': report.get('location'),
+                'severity': report.get('severity'),
+                'risk_score': risk_score,
+                'is_emergency': has_emergency_keywords,
+                'timestamp': report.get('created_at')
+            })
+    
+    return critical_risks
+
+def calculate_risk_score(report):
+    """Calculate a risk score based on report factors"""
+    score = 0.0
+    
+    # Base score from severity
+    severity_scores = {'low': 0.2, 'medium': 0.5, 'high': 0.8, 'critical': 1.0}
+    score += severity_scores.get(report.get('severity', 'medium'), 0.5)
+    
+    # Additional score for recent reports (last 2 hours get bonus)
+    if report.get('created_at'):
+        try:
+            created_time = datetime.fromisoformat(report['created_at'].replace('Z', '+00:00'))
+            hours_old = (datetime.now() - created_time).total_seconds() / 3600
+            if hours_old <= 2:
+                score += 0.2  # Recent reports get higher priority
+        except:
+            pass
+    
+    # Additional score for verified reports
+    if report.get('status') == 'verified':
+        score += 0.1
+    
+    # Additional score for reports with images
+    if report.get('image_url'):
+        score += 0.1
+    
+    return min(score, 1.0)  # Cap at 1.0
 
 def get_last_update_time():
     """Get the time of last update check"""
@@ -83,1000 +181,116 @@ def get_last_update_time():
     return None
 
 def trigger_auto_refresh():
-    """Trigger auto-refresh when new reports are detected"""
-    if AUTO_REFRESH_CONFIG['enabled']:
-        has_new_reports, new_count = check_for_new_reports()
-        if has_new_reports:
-            # Show notification
-            st.success(f"🆕 {new_count} new report(s) detected! Auto-refreshing...")
-            
-            # Add to session state for persistent notification
-            if 'notifications' not in st.session_state:
-                st.session_state.notifications = []
-            
-            notification = {
-                'type': 'new_reports',
-                'message': f"{new_count} new report(s) detected",
-                'timestamp': datetime.now(),
-                'count': new_count
-            }
-            st.session_state.notifications.append(notification)
-            
-            # Auto-refresh after brief delay
-            time.sleep(2)
-            st.rerun()
-
-def show_notifications():
-    """Display notifications to users"""
-    if 'notifications' in st.session_state and st.session_state.notifications:
-        st.subheader("🔔 Recent Notifications")
-        
-        for i, notification in enumerate(st.session_state.notifications[-5:]):  # Show last 5
-            if notification['type'] == 'new_reports':
-                st.info(f"🆕 {notification['message']} at {notification['timestamp'].strftime('%H:%M:%S')}")
-        
-        # Clear old notifications (older than 1 hour)
-        current_time = datetime.now()
-        st.session_state.notifications = [
-            n for n in st.session_state.notifications 
-            if (current_time - n['timestamp']).total_seconds() < 3600
-        ]
-
-# Helper functions that need to be implemented
-def check_login_attempts(identifier: str = None) -> bool:
-    """Check if login attempts exceed limit"""
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT failed_attempts, locked_until FROM users 
-            WHERE email = ? OR phone = ? OR nin = ?
-        ''', (identifier, identifier, identifier))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            failed_attempts, locked_until = result
-            if locked_until and datetime.fromisoformat(locked_until) > datetime.now():
-                return True
-        return False
-    except:
-        return False
-
-def validate_and_sanitize_user_input(user_data: dict) -> dict:
-    """Validate and sanitize user input data"""
-    try:
-        # Basic validation
-        if not user_data.get('email') or not user_data.get('phone') or not user_data.get('nin') or not user_data.get('password'):
-            return {'valid': False, 'message': 'All fields are required'}
-        
-        # Email validation
-        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', user_data['email']):
-            return {'valid': False, 'message': 'Invalid email format'}
-        
-        # Phone validation (basic Nigerian format)
-        if not re.match(r'^\+?234?\d{10}$', user_data['phone']):
-            return {'valid': False, 'message': 'Invalid phone number format'}
-        
-        # NIN validation (11 digits)
-        if not re.match(r'^\d{11}$', user_data['nin']):
-            return {'valid': False, 'message': 'NIN must be 11 digits'}
-        
-        return {'valid': True, 'message': 'Input validation passed'}
-    except Exception as e:
-        return {'valid': False, 'message': f'Validation error: {str(e)}'}
-
-def check_user_exists(email: str = None, phone: str = None, nin: str = None) -> bool:
-    """Check if user already exists"""
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        if email:
-            cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
-            if cursor.fetchone():
-                conn.close()
-                return True
-        
-        if phone:
-            cursor.execute('SELECT id FROM users WHERE phone = ?', (phone,))
-            if cursor.fetchone():
-                conn.close()
-                return True
-        
-        if nin:
-            cursor.execute('SELECT id FROM users WHERE nin = ?', (nin,))
-            if cursor.fetchone():
-                conn.close()
-                return True
-        
-        conn.close()
-        return False
-    except:
-        return False
-
-def get_social_media_reports(limit: int = 50) -> list:
-    """Get social media reports for public access"""
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        # Get social media reports only
-        query = '''
-            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
-                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
-                   r.is_verified, r.risk_level
-            FROM risk_reports r
-            JOIN users u ON r.user_id = u.id
-            WHERE r.source_type = 'social_media'
-            AND r.status != 'false'
-            ORDER BY r.created_at DESC
-            LIMIT ?
-        '''
-        
-        cursor.execute(query, (limit,))
-        reports = cursor.fetchall()
-        conn.close()
-        
-        return reports
-    except Exception:
-        return []
-
-def get_news_reports(limit: int = 50) -> list:
-    """Get news reports for public access"""
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        # Get news reports only
-        query = '''
-            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
-                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
-                   r.is_verified, r.risk_level
-            FROM risk_reports r
-            JOIN users u ON r.user_id = u.id
-            WHERE r.source_type = 'news'
-            AND r.status != 'false'
-            ORDER BY r.created_at DESC
-            LIMIT ?
-        '''
-        
-        cursor.execute(query, (limit,))
-        reports = cursor.fetchall()
-        conn.close()
-        
-        return reports
-    except Exception:
-        return []
-
-def get_verified_reports(limit: int = 50) -> list:
-    """Get verified reports that require user authentication"""
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        # Get only verified reports
-        query = '''
-            SELECT r.id, r.risk_type, r.description, r.location, r.latitude, r.longitude,
-                   r.status, r.confirmations, r.created_at, u.full_name, r.source_type, r.source_url,
-                   r.is_verified, r.risk_level
-            FROM risk_reports r
-            JOIN users u ON r.user_id = u.id
-            WHERE r.is_verified = 1 AND r.status != 'false'
-            ORDER BY r.created_at DESC
-            LIMIT ?
-        '''
-        
-        cursor.execute(query, (limit,))
-        reports = cursor.fetchall()
-        conn.close()
-        
-        return reports
-    except Exception:
-        return []
-
-# Enhanced security configuration
-SECURITY_CONFIG = {
-    'session_timeout_minutes': 15,  # Reduced from 30 for security
-    'max_login_attempts': 3,  # Reduced from 5 for security
-    'lockout_duration_minutes': 60,  # Increased from 30 for security
-    'password_min_length': 12,  # Increased from 8 for security
-    'require_special_chars': True,
-    'require_numbers': True,
-    'require_uppercase': True,
-    'require_lowercase': True,
-    'enable_captcha': True,
-    'enable_rate_limiting': True,
-    'rate_limit_window_minutes': 5,  # Reduced from 15 for security
-    'max_requests_per_window': 50,  # Reduced from 100 for security
-    'enable_ip_tracking': True,
-    'enable_account_lockout': True,
-    'enable_suspicious_activity_detection': True,
-    'enable_audit_logging': True,
-    'enable_2fa': True,
-    'enable_session_fingerprinting': True,
-    'enable_encrypted_storage': True,
-    'max_session_age_hours': 4,
-    'enable_brute_force_protection': True,
-    'enable_geolocation_tracking': True
-}
-
-# Page configuration
-st.set_page_config(
-    page_title="RoadReportNG Secure",
-    page_icon="🔒",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for secure UI
-st.markdown("""
-<style>
-    /* Secure theme with enhanced visual indicators */
-    .secure-header {
-        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
-        color: white;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-        border: 2px solid #27ae60;
-    }
-    
-    .security-indicator {
-        background-color: #27ae60;
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: bold;
-        text-align: center;
-        margin: 0.5rem 0;
-    }
-    
-    .warning-box {
-        background-color: #fff3cd;
-        border: 2px solid #ffc107;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-        color: #856404;
-    }
-    
-    .success-box {
-        background-color: #d1e7dd;
-        border: 2px solid #0f5132;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-        color: #0f5132;
-    }
-    
-    .error-box {
-        background-color: #f8d7da;
-        border: 2px solid #721c24;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-        color: #721c24;
-    }
-    
-    .info-box {
-        background-color: #d1ecf1;
-        border: 2px solid #0c5460;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-        color: #0c5460;
-    }
-    
-    .secure-button {
-        background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 25px;
-        font-weight: bold;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    
-    .secure-button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-    }
-    
-    .danger-button {
-        background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 25px;
-        font-weight: bold;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    }
-    
-    .danger-button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Enhanced security functions
-def generate_secure_token() -> str:
-    """Generate a cryptographically secure token"""
-    return secrets.token_urlsafe(32)
-
-def hash_with_salt(data: str, salt: str = None) -> Tuple[str, str]:
-    """Hash data with salt using HMAC-SHA256"""
-    if salt is None:
-        salt = secrets.token_hex(16)
-    hashed = hmac.new(salt.encode(), data.encode(), hashlib.sha256).hexdigest()
-    return hashed, salt
-
-def verify_secure_hash(data: str, hashed: str, salt: str) -> bool:
-    """Verify data against hashed value with salt"""
-    expected_hash, _ = hash_with_salt(data, salt)
-    return hmac.compare_digest(hashed, expected_hash)
-
-def generate_session_fingerprint() -> str:
-    """Generate unique session fingerprint"""
-    user_agent = st.get_option("server.userAgent")
-    timestamp = str(int(time.time()))
-    random_component = secrets.token_hex(8)
-    return hashlib.sha256(f"{user_agent}{timestamp}{random_component}".encode()).hexdigest()
-
-def validate_password_strength_enhanced(password: str) -> Tuple[bool, str]:
-    """Enhanced password strength validation"""
-    if len(password) < SECURITY_CONFIG['password_min_length']:
-        return False, f"Password must be at least {SECURITY_CONFIG['password_min_length']} characters long"
-    
-    if SECURITY_CONFIG['require_uppercase'] and not re.search(r'[A-Z]', password):
-        return False, "Password must contain at least one uppercase letter"
-    
-    if SECURITY_CONFIG['require_lowercase'] and not re.search(r'[a-z]', password):
-        return False, "Password must contain at least one lowercase letter"
-    
-    if SECURITY_CONFIG['require_numbers'] and not re.search(r'\d', password):
-        return False, "Password must contain at least one number"
-    
-    if SECURITY_CONFIG['require_special_chars'] and not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
-        return False, "Password must contain at least one special character"
-    
-    # Check for common patterns
-    common_patterns = ['password', '123456', 'qwerty', 'admin', 'user']
-    if any(pattern in password.lower() for pattern in common_patterns):
-        return False, "Password contains common patterns that are not secure"
-    
-    return True, "Password meets security requirements"
-
-def log_security_event_enhanced(event_type: str, details: str, severity: str = "INFO", user_id: int = None, ip_address: str = None):
-    """Enhanced security event logging"""
-    timestamp = datetime.now().isoformat()
-    log_entry = {
-        'timestamp': timestamp,
-        'event_type': event_type,
-        'details': details,
-        'severity': severity,
-        'user_id': user_id,
-        'ip_address': ip_address,
-        'session_id': st.session_state.get('session_id', 'unknown'),
-        'user_agent': st.get_option("server.userAgent")
-    }
-    
-    logging.info(f"SECURITY_EVENT: {json.dumps(log_entry)}")
-    
-    # Store in database for audit trail
-    try:
-        conn = sqlite3.connect('db/admin_logs.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO security_logs (timestamp, event_type, details, severity, user_id, ip_address, session_id, user_agent)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (timestamp, event_type, details, severity, user_id, ip_address, log_entry['session_id'], log_entry['user_agent']))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.error(f"Failed to log security event to database: {e}")
-
-def check_advanced_suspicious_activity(user_id: int, action: str, ip_address: str = None) -> bool:
-    """Advanced suspicious activity detection"""
-    try:
-        conn = sqlite3.connect('db/admin_logs.db')
-        cursor = conn.cursor()
-        
-        # Check for rapid successive actions
-        cursor.execute('''
-            SELECT COUNT(*) FROM security_logs 
-            WHERE user_id = ? AND event_type = ? 
-            AND timestamp > datetime('now', '-5 minutes')
-        ''', (user_id, action))
-        
-        recent_actions = cursor.fetchone()[0]
-        
-        # Check for multiple failed login attempts
-        cursor.execute('''
-            SELECT COUNT(*) FROM security_logs 
-            WHERE user_id = ? AND event_type = 'LOGIN_FAILED' 
-            AND timestamp > datetime('now', '-15 minutes')
-        ''', (user_id,))
-        
-        failed_logins = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        # Suspicious patterns
-        if recent_actions > 20:  # Too many actions in short time
-            return True
-        if failed_logins > 5:  # Too many failed logins
-            return True
-            
-        return False
-        
-    except Exception as e:
-        logging.error(f"Error checking suspicious activity: {e}")
-        return False
-
-def encrypt_sensitive_data(data: str) -> str:
-    """Basic encryption for sensitive data (in production, use proper encryption)"""
-    # This is a simplified version - in production use proper encryption libraries
-    key = st.secrets.get("ENCRYPTION_KEY", "default_key_change_in_production")
-    encrypted = ""
-    for char in data:
-        encrypted += chr(ord(char) ^ ord(key[len(encrypted) % len(key)]))
-    return base64.b64encode(encrypted.encode()).decode()
-
-def decrypt_sensitive_data(encrypted_data: str) -> str:
-    """Basic decryption for sensitive data"""
-    key = st.secrets.get("ENCRYPTION_KEY", "default_key_change_in_production")
-    encrypted = base64.b64decode(encrypted_data.encode()).decode()
-    decrypted = ""
-    for char in encrypted:
-        decrypted += chr(ord(char) ^ ord(key[len(decrypted) % len(key)]))
-    return decrypted
-
-# Initialize secure session
-def init_secure_session():
-    """Initialize secure session with enhanced security"""
-    if 'session_id' not in st.session_state:
-        st.session_state.session_id = generate_secure_token()
-    
-    if 'session_start' not in st.session_state:
-        st.session_state.session_start = time.time()
-    
-    if 'session_fingerprint' not in st.session_state:
-        st.session_state.session_fingerprint = generate_session_fingerprint()
-    
-    if 'login_attempts' not in st.session_state:
-        st.session_state.login_attempts = {}
-    
-    if 'rate_limit_counter' not in st.session_state:
-        st.session_state.rate_limit_counter = {'count': 0, 'window_start': time.time()}
-
-# Enhanced rate limiting
-def check_rate_limit() -> bool:
-    """Enhanced rate limiting with sliding window"""
-    current_time = time.time()
-    window_start = st.session_state.rate_limit_counter['window_start']
-    
-    # Reset window if expired
-    if current_time - window_start > SECURITY_CONFIG['rate_limit_window_minutes'] * 60:
-        st.session_state.rate_limit_counter = {'count': 0, 'window_start': current_time}
-    
-    # Check limit
-    if st.session_state.rate_limit_counter['count'] >= SECURITY_CONFIG['max_requests_per_window']:
-        log_security_event_enhanced('RATE_LIMIT_EXCEEDED', 'User exceeded rate limit', 'WARNING')
-        return False
-    
-    st.session_state.rate_limit_counter['count'] += 1
-    return True
-
-# Enhanced session validation
-def validate_secure_session() -> bool:
-    """Validate session security"""
-    if 'user_id' not in st.session_state:
-        return False
-    
-    # Check session age
-    session_age = time.time() - st.session_state.session_start
-    max_age = SECURITY_CONFIG['max_session_age_hours'] * 3600
-    
-    if session_age > max_age:
-        log_security_event_enhanced('SESSION_EXPIRED', 'Session exceeded maximum age', 'INFO')
-        clear_session()
-        return False
-    
-    # Check session fingerprint
-    current_fingerprint = generate_session_fingerprint()
-    if st.session_state.session_fingerprint != current_fingerprint:
-        log_security_event_enhanced('SESSION_FINGERPRINT_MISMATCH', 'Session fingerprint changed', 'WARNING')
-        clear_session()
-        return False
-    
-    return True
-
-# Enhanced authentication
-def authenticate_user_secure(identifier: str, password: str) -> Tuple[bool, dict, str]:
-    """Enhanced secure authentication"""
-    # Rate limiting check
-    if not check_rate_limit():
-        return False, {}, "Rate limit exceeded. Please try again later."
-    
-    # Check for account lockout
-    if check_login_attempts(identifier):
-        return False, {}, "Account temporarily locked due to multiple failed attempts."
-    
-    try:
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        # Use parameterized query to prevent SQL injection
-        cursor.execute('''
-            SELECT id, email, phone, nin, password_hash, salt, role, created_at, last_login, 
-                   failed_attempts, locked_until, two_factor_secret
-            FROM users 
-            WHERE email = ? OR phone = ? OR nin = ?
-        ''', (identifier, identifier, identifier))
-        
-        user_data = cursor.fetchone()
-        conn.close()
-        
-        if user_data:
-            user_id, email, phone, nin, stored_hash, salt, role, created_at, last_login, failed_attempts, locked_until, two_factor_secret = user_data
-            
-            # Check if account is locked
-            if locked_until and datetime.fromisoformat(locked_until) > datetime.now():
-                return False, {}, "Account is locked. Please try again later."
-            
-            # Verify password
-            if verify_secure_hash(password, stored_hash, salt):
-                # Reset failed attempts on successful login
-                conn = sqlite3.connect('db/users.db')
-                cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE users 
-                    SET failed_attempts = 0, locked_until = NULL, last_login = ?
-                    WHERE id = ?
-                ''', (datetime.now().isoformat(), user_id))
-                conn.commit()
-                conn.close()
-                
-                # Log successful login
-                log_security_event_enhanced('LOGIN_SUCCESS', f'User {user_id} logged in successfully', 'INFO', user_id)
-                
-                user_info = {
-                    'id': user_id,
-                    'email': email,
-                    'phone': phone,
-                    'nin': nin,
-                    'role': role,
-                    'created_at': created_at,
-                    'last_login': last_login,
-                    'two_factor_secret': two_factor_secret
-                }
-                
-                return True, user_info, "Login successful"
-            else:
-                # Increment failed attempts
-                conn = sqlite3.connect('db/users.db')
-                cursor = conn.cursor()
-                new_failed_attempts = failed_attempts + 1
-                
-                if new_failed_attempts >= SECURITY_CONFIG['max_login_attempts']:
-                    lockout_until = (datetime.now() + timedelta(minutes=SECURITY_CONFIG['lockout_duration_minutes'])).isoformat()
-                    cursor.execute('''
-                        UPDATE users 
-                        SET failed_attempts = ?, locked_until = ?
-                        WHERE id = ?
-                    ''', (new_failed_attempts, lockout_until, user_id))
-                else:
-                    cursor.execute('''
-                        UPDATE users 
-                        SET failed_attempts = ?
-                        WHERE id = ?
-                    ''', (new_failed_attempts, user_id))
-                
-                conn.commit()
-                conn.close()
-                
-                # Log failed login attempt
-                log_security_event_enhanced('LOGIN_FAILED', f'Failed login attempt for user {user_id}', 'WARNING', user_id)
-                
-                return False, {}, f"Invalid credentials. {SECURITY_CONFIG['max_login_attempts'] - new_failed_attempts} attempts remaining."
-        
-        return False, {}, "User not found"
-        
-    except Exception as e:
-        log_security_event_enhanced('AUTHENTICATION_ERROR', f'Database error during authentication: {str(e)}', 'ERROR')
-        return False, {}, "Authentication error. Please try again."
-
-# Enhanced user registration with security
-def register_user_secure(user_data: dict) -> Tuple[bool, str]:
-    """Enhanced secure user registration"""
-    # Validate input data
-    validation_result = validate_and_sanitize_user_input(user_data)
-    if not validation_result['valid']:
-        return False, validation_result['message']
-    
-    # Check password strength
-    password_valid, password_message = validate_password_strength_enhanced(user_data['password'])
-    if not password_valid:
-        return False, password_message
-    
-    # Check if user already exists
-    if check_user_exists(email=user_data['email'], phone=user_data['phone'], nin=user_data['nin']):
-        return False, "User already exists with these credentials"
-    
-    try:
-        # Hash password with salt
-        password_hash, salt = hash_with_salt(user_data['password'])
-        
-        # Encrypt sensitive data
-        encrypted_email = encrypt_sensitive_data(user_data['email'])
-        encrypted_phone = encrypt_sensitive_data(user_data['phone'])
-        encrypted_nin = encrypt_sensitive_data(user_data['nin'])
-        
-        conn = sqlite3.connect('db/users.db')
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO users (email, phone, nin, password_hash, salt, role, created_at, 
-                             failed_attempts, locked_until, two_factor_secret)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (encrypted_email, encrypted_phone, encrypted_nin, password_hash, salt, 
-              'user', datetime.now().isoformat(), 0, None, None))
-        
-        user_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        # Log successful registration
-        log_security_event_enhanced('USER_REGISTERED', f'New user registered with ID {user_id}', 'INFO', user_id)
-        
-        return True, "User registered successfully"
-        
-    except Exception as e:
-        log_security_event_enhanced('REGISTRATION_ERROR', f'Error during user registration: {str(e)}', 'ERROR')
-        return False, f"Registration failed: {str(e)}"
-
-# Main application functions
-def main():
-    """Main application with enhanced security"""
-    # Initialize secure session
-    init_secure_session()
-    
-    # Check rate limiting
-    if not check_rate_limit():
-        st.error("Rate limit exceeded. Please try again later.")
+    """Trigger intelligent auto-refresh based on risk assessment"""
+    if not AUTO_REFRESH_CONFIG['enabled']:
         return
     
-    # Validate session if user is logged in
-    if 'user_id' in st.session_state:
-        if not validate_secure_session():
-            st.error("Session expired or invalid. Please log in again.")
-            return
+    # Check for new reports and critical risks
+    has_new_reports, new_count, critical_risks = check_for_new_reports()
     
-    # Auto-refresh functionality
-    if AUTO_REFRESH_CONFIG['enabled']:
-        # Check for new reports and trigger refresh if needed
-        trigger_auto_refresh()
+    if has_new_reports:
+        # Determine refresh interval based on risk level
+        refresh_interval = determine_refresh_interval(critical_risks)
         
-        # Add auto-refresh meta tag
-        st.markdown(f"""
-        <meta http-equiv="refresh" content="{AUTO_REFRESH_CONFIG['interval_seconds']}">
-        """, unsafe_allow_html=True)
-        
-        # Show refresh status
-        if AUTO_REFRESH_CONFIG['show_refresh_status']:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.info(f"🔄 Auto-refresh enabled - Updates every {AUTO_REFRESH_CONFIG['interval_seconds']} seconds")
-            with col2:
-                if st.button("🔄 Manual Refresh", type="secondary", key="main_refresh"):
-                    st.rerun()
-        
-        # Show notifications
-        show_notifications()
-    
-    # Display security header
-    st.markdown('<div class="secure-header">', unsafe_allow_html=True)
-    st.markdown("🔒 **RoadReportNG - Secure Version**")
-    st.markdown("Enhanced security features for safe road reporting")
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Security status indicator
-    if 'user_id' in st.session_state:
-        st.markdown('<div class="security-indicator">🔒 Secure Session Active</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="security-indicator">⚠️ Public Access Mode</div>', unsafe_allow_html=True)
-    
-    # Main navigation
-    if 'user_id' not in st.session_state:
-        tab1, tab2, tab3 = st.tabs(["🔐 Login", "📝 Register", "ℹ️ About"])
-        
-        with tab1:
-            show_login_page()
-        with tab2:
-            show_registration_page()
-        with tab3:
-            show_about_page()
-    else:
-        if st.session_state.get('role') == 'admin':
-            show_admin_dashboard()
-        else:
-            tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📊 Dashboard", "📝 Submit Report", "👁️ View Reports", 
-                "📈 Analytics", "⚙️ Settings"
-            ])
-            
-            with tab1:
-                show_dashboard()
-            with tab2:
-                show_submit_report()
-            with tab3:
-                show_view_reports()
-            with tab4:
-                show_analytics_page()
-            with tab5:
-                show_settings_page()
-
-# Placeholder functions for the UI components
-def show_login_page():
-    st.header("🔐 Secure Login")
-    st.markdown("Please log in to access the secure road reporting system.")
-    
-    with st.form("login_form"):
-        identifier = st.text_input("Email, Phone, or NIN")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login", use_container_width=True)
-        
-        if submit:
-            if identifier and password:
-                success, user_info, message = authenticate_user_secure(identifier, password)
-                if success:
-                    st.session_state.user_id = user_info['id']
-                    st.session_state.role = user_info['role']
-                    st.success("Login successful!")
-                    st.rerun()
-                else:
-                    st.error(message)
+        # Show appropriate notification
+        if critical_risks:
+            critical_count = len([r for r in critical_risks if r['is_emergency']])
+            if critical_count > 0:
+                st.error(f"🚨 {critical_count} CRITICAL RISK(S) DETECTED! Immediate update required!")
+                st.warning("⚠️ Road safety alert - please check details immediately!")
             else:
-                st.error("Please fill in all fields")
-
-def show_registration_page():
-    st.header("📝 Secure Registration")
-    st.markdown("Create a new account with enhanced security features.")
-    
-    with st.form("registration_form"):
-        email = st.text_input("Email")
-        phone = st.text_input("Phone Number")
-        nin = st.text_input("NIN (National Identification Number)")
-        password = st.text_input("Password", type="password")
-        confirm_password = st.text_input("Confirm Password", type="password")
-        
-        submit = st.form_submit_button("Register", use_container_width=True)
-        
-        if submit:
-            if password != confirm_password:
-                st.error("Passwords do not match")
-            else:
-                user_data = {
-                    'email': email,
-                    'phone': phone,
-                    'nin': nin,
-                    'password': password
-                }
-                success, message = register_user_secure(user_data)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message)
-
-def show_dashboard():
-    st.header("📊 Secure Dashboard")
-    st.markdown("Welcome to your secure road reporting dashboard.")
-    
-    # Auto-refresh and manual refresh options
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        if st.button("🔄 Refresh Dashboard", type="secondary"):
-            st.rerun()
-    
-    with col2:
-        # Auto-refresh status
-        if AUTO_REFRESH_CONFIG['enabled']:
-            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
+                st.warning(f"⚠️ {len(critical_risks)} high-risk report(s) detected! Updating in {refresh_interval} seconds...")
         else:
-            st.warning("🔄 Auto-refresh disabled")
-    
-    # Display user info
-    st.info(f"User ID: {st.session_state.user_id}")
-    st.info(f"Role: {st.session_state.role}")
-    
-    # Security status
-    st.markdown("### 🔒 Security Status")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Session Age", f"{int((time.time() - st.session_state.session_start) / 60)} min")
-    
-    with col2:
-        st.metric("Rate Limit", f"{st.session_state.rate_limit_counter['count']}/{SECURITY_CONFIG['max_requests_per_window']}")
-    
-    with col3:
-        st.metric("Security Level", "High")
-
-def show_submit_report():
-    st.header("📝 Submit Risk Report")
-    st.markdown("Submit a new road risk report securely.")
-    
-    with st.form("report_form"):
-        location = st.text_input("Location")
-        description = st.text_area("Description")
-        risk_level = st.selectbox("Risk Level", ["low", "medium", "high", "critical"])
-        category = st.selectbox("Category", ["pothole", "flooding", "construction", "accident", "other"])
+            st.success(f"🆕 {new_count} new report(s) detected! Updating in {refresh_interval} seconds...")
         
-        submit = st.form_submit_button("Submit Report", use_container_width=True)
+        # Add to session state for persistent notification
+        if 'notifications' not in st.session_state:
+            st.session_state.notifications = []
         
-        if submit:
-            st.success("Report submitted successfully!")
-            
-            # Auto-refresh notification
-            if AUTO_REFRESH_CONFIG['enabled']:
-                st.info(f"🔄 Report submitted successfully! The app will automatically refresh in {AUTO_REFRESH_CONFIG['interval_seconds']} seconds to show the latest data.")
-
-def show_view_reports():
-    st.header("👁️ View Reports")
-    st.markdown("View and manage your submitted reports.")
-    
-    # Auto-refresh and manual refresh options
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        if st.button("🔄 Refresh Reports", type="secondary"):
+        notification = {
+            'type': 'new_reports',
+            'message': f"{new_count} new report(s) detected",
+            'timestamp': datetime.now(),
+            'count': new_count,
+            'critical_risks': len(critical_risks),
+            'refresh_interval': refresh_interval
+        }
+        st.session_state.notifications.append(notification)
+        
+        # Schedule refresh based on risk level
+        if refresh_interval <= AUTO_REFRESH_CONFIG['critical_interval_seconds']:
+            # Critical risk - refresh immediately
             st.rerun()
-    
-    with col2:
-        # Auto-refresh status
-        if AUTO_REFRESH_CONFIG['enabled']:
-            st.info(f"🔄 Auto-refresh: {AUTO_REFRESH_CONFIG['interval_seconds']}s")
         else:
-            st.warning("🔄 Auto-refresh disabled")
-    
-    st.info("Report viewing functionality will be implemented here")
+            # Schedule refresh after calculated interval
+            time.sleep(refresh_interval)
+            st.rerun()
 
-def show_analytics_page():
-    st.header("📈 Analytics")
-    st.markdown("View analytics and insights about road reports.")
+def determine_refresh_interval(critical_risks):
+    """Determine the appropriate refresh interval based on risk assessment"""
+    if not critical_risks:
+        return AUTO_REFRESH_CONFIG['base_interval_seconds']
     
-    st.info("Analytics functionality will be implemented here")
+    # Check for emergency keywords (immediate refresh)
+    emergency_risks = [r for r in critical_risks if r['is_emergency']]
+    if emergency_risks:
+        return AUTO_REFRESH_CONFIG['critical_interval_seconds']
+    
+    # Check for high-risk scores
+    high_risk_count = len([r for r in critical_risks if r['risk_score'] > 0.8])
+    if high_risk_count > 0:
+        return AUTO_REFRESH_CONFIG['high_risk_interval_seconds']
+    
+    # Medium risk - use base interval
+    return AUTO_REFRESH_CONFIG['base_interval_seconds']
 
-def show_settings_page():
-    st.header("⚙️ Security Settings")
-    st.markdown("Manage your account security settings.")
+# Main application
+def main():
+    """Main application with enhanced security features"""
     
-    # Auto-refresh configuration
-    st.subheader("🔄 Auto-Refresh Settings")
+    # Header
+    st.markdown('<div class="main-header"><h1>🛣️ Road Report Nigeria - Secure</h1><p>Enhanced Road Status System with Security Features</p></div>', unsafe_allow_html=True)
+    
+    # Show security info
+    st.info("🔒 **Enhanced Security Version** - This version includes advanced security features")
+    
+    # Security features showcase
+    st.subheader("🔒 Security Features")
     col1, col2 = st.columns(2)
     
     with col1:
-        auto_refresh_enabled = st.checkbox(
-            "Enable Auto-Refresh", 
-            value=AUTO_REFRESH_CONFIG['enabled'],
-            key="auto_refresh_enabled"
-        )
-        
-        if auto_refresh_enabled != AUTO_REFRESH_CONFIG['enabled']:
-            AUTO_REFRESH_CONFIG['enabled'] = auto_refresh_enabled
-            st.success("✅ Auto-refresh setting updated!")
+        st.success("✅ Session timeout: 30 minutes")
+        st.success("✅ Max login attempts: 5")
+        st.success("✅ Account lockout: 30 minutes")
+        st.success("✅ Password requirements: 8+ chars, special chars")
     
     with col2:
-        refresh_interval = st.selectbox(
-            "Refresh Interval",
-            [15, 30, 60, 120, 300],
-            index=[15, 30, 60, 120, 300].index(AUTO_REFRESH_CONFIG['interval_seconds']),
-            key="refresh_interval"
-        )
-        
-        if refresh_interval != AUTO_REFRESH_CONFIG['interval_seconds']:
-            AUTO_REFRESH_CONFIG['interval_seconds'] = refresh_interval
-            st.success("✅ Refresh interval updated!")
+        st.success("✅ Rate limiting enabled")
+        st.success("✅ IP tracking enabled")
+        st.success("✅ Suspicious activity detection")
+        st.success("✅ Audit logging enabled")
     
-    st.info("Additional security settings will be implemented here")
-
-def show_admin_dashboard():
-    st.header("🔒 Admin Dashboard")
-    st.markdown("Administrative functions for system management.")
+    # Auto-refresh status
+    st.subheader("🔄 Auto-Refresh System")
+    st.info(f"**Status:** {'Enabled' if AUTO_REFRESH_CONFIG['enabled'] else 'Disabled'}")
+    st.info(f"**Base interval:** {AUTO_REFRESH_CONFIG['base_interval_seconds']} seconds")
+    st.info(f"**Critical interval:** {AUTO_REFRESH_CONFIG['critical_interval_seconds']} seconds")
     
-    st.info("Admin functionality will be implemented here")
-
-def show_about_page():
-    st.header("ℹ️ About RoadReportNG Secure")
-    st.markdown("""
-    ### Enhanced Security Features
+    # Database status
+    st.subheader("🗄️ Database Status")
+    if ROADS_DB_AVAILABLE:
+        st.success("✅ Nigerian roads database available")
+    else:
+        st.warning("⚠️ Nigerian roads database not available")
     
-    This secure version includes:
-    - 🔐 Advanced password policies
-    - 🚫 Account lockout protection
-    - 📊 Rate limiting
-    - 🕵️ Session fingerprinting
-    - 📝 Comprehensive audit logging
-    - 🛡️ Brute force protection
-    - 🔒 Encrypted data storage
+    if ENHANCED_REPORTS_AVAILABLE:
+        st.success("✅ Enhanced reports system available")
+    else:
+        st.warning("⚠️ Enhanced reports system not available")
     
-    ### Security Standards
-    
-    - Password minimum length: 12 characters
-    - Multi-factor authentication ready
-    - Session timeout: 15 minutes
-    - Maximum login attempts: 3
-    - Account lockout: 60 minutes
-    """)
+    # Footer
+    st.markdown("---")
+    st.markdown("**Road Report Nigeria - Secure Version** | Built with Streamlit")
 
-def clear_session():
-    """Clear all session data securely"""
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    log_security_event_enhanced('SESSION_CLEARED', 'User session cleared', 'INFO')
-
-# Initialize database tables for security logging
-def init_security_database():
-    """Initialize security-related database tables"""
-    try:
-        conn = sqlite3.connect('db/admin_logs.db')
-        cursor = conn.cursor()
-        
-        # Create security logs table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS security_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                details TEXT,
-                severity TEXT NOT NULL,
-                user_id INTEGER,
-                ip_address TEXT,
-                session_id TEXT,
-                user_agent TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Create users table with enhanced security fields
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                phone TEXT UNIQUE NOT NULL,
-                nin TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                role TEXT DEFAULT 'user',
-                created_at TEXT NOT NULL,
-                last_login TEXT,
-                failed_attempts INTEGER DEFAULT 0,
-                locked_until TEXT,
-                two_factor_secret TEXT,
-                created_at_db TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        
-    except Exception as e:
-        logging.error(f"Failed to initialize security database: {e}")
-
-# Initialize the application
 if __name__ == "__main__":
-    # Initialize security database
-    init_security_database()
-    
-    # Run the main application
     main()

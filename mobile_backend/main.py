@@ -143,6 +143,20 @@ async def general_exception_handler(request, exc):
     )
 
 # Pydantic models for request/response
+class User(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: str
+    phone: Optional[str] = None
+    state: str
+    lga: str
+    is_verified: bool = False
+    is_locked: bool = False
+    lockout_until: Optional[str] = None
+    created_at: str
+    last_login: Optional[str] = None
+
 class UserRegistration(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., pattern=r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -400,21 +414,35 @@ def get_current_user(username: str = Depends(verify_token)):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        user = cursor.fetchone()
+        user_data = cursor.fetchone()
         
-        if not user:
+        if not user_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         
-        if user['is_locked'] and user['lockout_until'] and datetime.fromisoformat(user['lockout_until']) > datetime.utcnow():
+        if user_data['is_locked'] and user_data['lockout_until'] and datetime.fromisoformat(user_data['lockout_until']) > datetime.utcnow():
             raise HTTPException(
                 status_code=status.HTTP_423_LOCKED,
                 detail="Account is temporarily locked"
             )
         
-        return dict(user)
+        # Convert to User model
+        return User(
+            id=user_data['id'],
+            username=user_data['username'],
+            email=user_data['email'],
+            full_name=user_data['full_name'],
+            phone=user_data.get('phone'),
+            state=user_data['state'],
+            lga=user_data['lga'],
+            is_verified=user_data['is_verified'],
+            is_locked=user_data['is_locked'],
+            lockout_until=user_data.get('lockout_until'),
+            created_at=user_data['created_at'],
+            last_login=user_data.get('last_login')
+        )
 
 # API endpoints
 @app.post(f"{API_PREFIX}/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

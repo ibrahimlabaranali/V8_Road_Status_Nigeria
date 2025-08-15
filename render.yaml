@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: v8-road-status-nigeria
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements_render.txt"
+    startCommand: "streamlit run render_app.py --server.port $PORT --server.address 0.0.0.0"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.13

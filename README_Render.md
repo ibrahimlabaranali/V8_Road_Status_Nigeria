@@ -28,6 +28,8 @@ V8_Road_Status_Report/
 ├── render_app.py              # Main application file for Render
 ├── requirements_render.txt    # Python dependencies for Render
 ├── runtime.txt               # Python version specification
+├── render.yaml               # Render service configuration
+├── Dockerfile                # Docker configuration (fallback)
 ├── .gitignore               # Git ignore rules
 ├── README_Render.md         # This file
 ├── streamlit_app_minimal.py # Original Streamlit app (untouched)
@@ -64,6 +66,16 @@ V8_Road_Status_Report/
    - Connect your GitHub repository
 
 ### Step 3: Configure Your Service
+
+**Important:** This project includes `render.yaml` and `Dockerfile` for automatic configuration!
+
+#### Option 1: Automatic Configuration (Recommended)
+- Render will automatically detect the `render.yaml` file
+- No manual configuration needed for build/start commands
+- Service will be configured as a Python web service
+
+#### Option 2: Manual Configuration
+If automatic detection fails, use these settings:
 
 #### Basic Settings
 - **Name:** `road-report-nigeria` (or your preferred name)

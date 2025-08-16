@@ -3,16 +3,5 @@ services:
     name: road-report-nigeria
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "streamlit run render_app.py --server.port $PORT --server.address 0.0.0.0"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.13
-      - key: PIP_NO_CACHE_DIR
-        value: "1"
-      - key: PIP_DISABLE_PIP_VERSION_CHECK
-        value: "1"
-      - key: USE_PIP
-        value: "1"
-      - key: DISABLE_POETRY
-        value: "1"
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run render_app.py --server.port $PORT --server.address 0.0.0.0

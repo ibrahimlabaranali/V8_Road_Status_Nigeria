@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: road-report-nigeria
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run render_app.py --server.port $PORT --server.address 0.0.0.0

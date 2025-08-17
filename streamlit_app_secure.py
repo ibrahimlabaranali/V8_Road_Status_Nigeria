@@ -63,7 +63,6 @@ AUTO_REFRESH_CONFIG = {
     'enabled': True,
     'base_interval_seconds': 300,  # 5 minutes for faster updates
     'critical_interval_seconds': 60,  # 1 minute for critical risks
-    'interval_seconds': 300,  # Default interval
     'manual_refresh_enabled': True,
     'show_refresh_status': True,
     'smart_refresh': True,
@@ -224,7 +223,7 @@ def determine_refresh_interval(critical_risks):
     # Check for high-risk scores
     high_risk_count = len([r for r in critical_risks if r['risk_score'] > 0.8])
     if high_risk_count > 0:
-        return AUTO_REFRESH_CONFIG['high_risk_interval_seconds']
+        return AUTO_REFRESH_CONFIG['base_interval_seconds']
     
     # Medium risk - use base interval
     return AUTO_REFRESH_CONFIG['base_interval_seconds']

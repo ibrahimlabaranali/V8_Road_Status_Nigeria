@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Nigerian Road Risk Reporter - Enhanced Minimal Version
-Complete road risk reporting system with minimal dependencies
+Nigerian Road Risk Reporter - Smart & Fast Version
+Clean, optimized road risk reporting system with smart user suggestions
 Python 3.13 compatible - Streamlit Cloud ready
 """
 
@@ -22,69 +22,38 @@ import urllib.parse
 
 # Import Nigerian roads database
 try:
-    from nigerian_roads_data import nigerian_roads_db
+    from nigerian_roads_data import NIGERIAN_STATES, MAJOR_ROADS
     ROADS_DB_AVAILABLE = True
-    # Initialize the Nigerian roads database if available
-    if nigerian_roads_db:
-        try:
-            nigerian_roads_db.init_database()
-            st.success("✅ Nigerian roads database initialized successfully!")
-        except Exception as e:
-            st.error(f"⚠️ Failed to initialize Nigerian roads database: {str(e)}")
-            ROADS_DB_AVAILABLE = False
-            nigerian_roads_db = None
 except ImportError:
     ROADS_DB_AVAILABLE = False
-    nigerian_roads_db = None
-    st.warning("⚠️ Nigerian roads database module not available")
+    NIGERIAN_STATES = {}
+    MAJOR_ROADS = {}
 
-# Import enhanced reports system
-try:
-    from enhanced_reports import enhanced_reports_system
-    ENHANCED_REPORTS_AVAILABLE = True
-except ImportError:
-    ENHANCED_REPORTS_AVAILABLE = False
-    enhanced_reports_system = None
-
-# Security configuration
+# Simplified security configuration
 SECURITY_CONFIG = {
     'session_timeout_minutes': 30,
-    'max_login_attempts': 5,  # Updated to 5 attempts
-    'lockout_duration_minutes': 30,  # 30-minute lockout after 5 failed attempts
+    'max_login_attempts': 5,
+    'lockout_duration_minutes': 30,
     'password_min_length': 8,
-    'require_special_chars': True,
-    'enable_captcha': True,
-    'enable_rate_limiting': True,
-    'rate_limit_window_minutes': 15,
-    'max_requests_per_window': 100,
-    'enable_ip_tracking': True,
-    'enable_account_lockout': True,
-    'enable_suspicious_activity_detection': True,
-    'enable_audit_logging': True
+    'require_special_chars': True
+}
+
+# Smart auto-refresh configuration
+AUTO_REFRESH_CONFIG = {
+    'enabled': True,
+    'base_interval_seconds': 300,  # 5 minutes for faster updates
+    'critical_interval_seconds': 30,  # 30 seconds for critical risks
+    'smart_refresh': True,
+    'risk_threshold': 0.7
 }
 
 # Page configuration
 st.set_page_config(
-    page_title="RoadReportNG",
+    page_title="RoadReportNG - Smart",
     page_icon="🛣️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Intelligent auto-refresh configuration
-AUTO_REFRESH_CONFIG = {
-    'enabled': True,
-    'base_interval_seconds': 900,  # 15 minutes base interval
-    'critical_interval_seconds': 30,  # 30 seconds for critical risks
-    'high_risk_interval_seconds': 120,  # 2 minutes for high-risk situations
-    'interval_seconds': 900,  # Default interval for backward compatibility
-    'manual_refresh_enabled': True,
-    'show_refresh_status': True,
-    'smart_refresh': True,  # Enable intelligent refresh
-    'risk_threshold': 0.7,  # Risk score threshold for immediate updates
-    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed'],
-    'max_refresh_count': 20
-}
 
 def check_for_new_reports():
     """Check if there are new reports since last check with intelligent risk assessment"""
@@ -788,6 +757,67 @@ def init_database():
             )
         ''')
         
+        # NEW: Smart user road tracking tables
+        # Track user road usage patterns for personalized suggestions
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_road_patterns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                road_name TEXT NOT NULL,
+                state TEXT NOT NULL,
+                lga TEXT NOT NULL,
+                frequency INTEGER DEFAULT 1,
+                last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                total_distance REAL DEFAULT 0,
+                preferred_time TEXT,
+                risk_level TEXT DEFAULT 'low',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(user_id, road_name, state, lga)
+            )
+        ''')
+        
+        # Track real-time road updates from multiple sources
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS road_updates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_type TEXT NOT NULL, -- 'user', 'driver', 'social_media', 'official'
+                source_id TEXT,
+                road_name TEXT NOT NULL,
+                state TEXT NOT NULL,
+                lga TEXT NOT NULL,
+                update_type TEXT NOT NULL, -- 'traffic', 'accident', 'construction', 'weather', 'security'
+                severity TEXT NOT NULL,
+                description TEXT NOT NULL,
+                coordinates TEXT,
+                image_url TEXT,
+                confidence_score REAL DEFAULT 0.5,
+                verified BOOLEAN DEFAULT 0,
+                verified_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (verified_by) REFERENCES users (id)
+            )
+        ''')
+        
+        # Track social media mentions and road-related posts
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS social_media_feeds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT NOT NULL, -- 'twitter', 'facebook', 'instagram', 'whatsapp'
+                post_id TEXT,
+                author TEXT,
+                content TEXT NOT NULL,
+                road_keywords TEXT,
+                location TEXT,
+                sentiment TEXT DEFAULT 'neutral',
+                relevance_score REAL DEFAULT 0.5,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed BOOLEAN DEFAULT 0
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         return True
@@ -868,6 +898,293 @@ def clear_session():
     """Clear user session"""
     st.session_state.authenticated = False
     st.session_state.user = {}
+
+# SMART ROAD TRACKING FUNCTIONS
+def track_user_road_usage(user_id: int, road_name: str, state: str, lga: str, distance: float = 0):
+    """Track when a user uses a specific road for personalized suggestions"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Check if road pattern already exists
+        cursor.execute('''
+            SELECT id, frequency, last_used FROM user_road_patterns 
+            WHERE user_id = ? AND road_name = ? AND state = ? AND lga = ?
+        ''', (user_id, road_name, state, lga))
+        
+        existing = cursor.fetchone()
+        current_time = datetime.now()
+        
+        if existing:
+            # Update existing pattern
+            pattern_id, current_freq, last_used = existing
+            new_freq = current_freq + 1
+            
+            cursor.execute('''
+                UPDATE user_road_patterns 
+                SET frequency = ?, last_used = ?, total_distance = total_distance + ?, updated_at = ?
+                WHERE id = ?
+            ''', (new_freq, current_time, distance, current_time, pattern_id))
+        else:
+            # Create new pattern
+            cursor.execute('''
+                INSERT INTO user_road_patterns 
+                (user_id, road_name, state, lga, frequency, last_used, total_distance, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+            ''', (user_id, road_name, state, lga, current_time, distance, current_time, current_time))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error tracking road usage: {str(e)}")
+        return False
+
+def get_user_road_suggestions(user_id: int, limit: int = 5) -> List[Dict]:
+    """Get personalized road suggestions based on user's frequent routes"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Get user's most frequent roads
+        cursor.execute('''
+            SELECT road_name, state, lga, frequency, last_used, risk_level
+            FROM user_road_patterns 
+            WHERE user_id = ? 
+            ORDER BY frequency DESC, last_used DESC
+            LIMIT ?
+        ''', (user_id, limit))
+        
+        frequent_roads = cursor.fetchall()
+        
+        # Get recent road updates for these roads
+        suggestions = []
+        for road in frequent_roads:
+            road_name, state, lga, freq, last_used, risk_level = road
+            
+            # Get latest updates for this road
+            cursor.execute('''
+                SELECT update_type, severity, description, created_at, confidence_score
+                FROM road_updates 
+                WHERE road_name = ? AND state = ? AND lga = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            ''', (road_name, state, lga))
+            
+            latest_update = cursor.fetchone()
+            
+            suggestions.append({
+                'road_name': road_name,
+                'state': state,
+                'lga': lga,
+                'frequency': freq,
+                'last_used': last_used,
+                'risk_level': risk_level,
+                'latest_update': latest_update
+            })
+        
+        conn.close()
+        return suggestions
+    except Exception as e:
+        st.error(f"Error getting road suggestions: {str(e)}")
+        return []
+
+def add_road_update(source_type: str, source_id: str, road_name: str, state: str, lga: str, 
+                   update_type: str, severity: str, description: str, coordinates: str = None, 
+                   image_url: str = None, confidence_score: float = 0.5):
+    """Add a new road update from any source (user, driver, social media, official)"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Set expiration time based on update type
+        if update_type in ['accident', 'construction', 'weather']:
+            expires_at = datetime.now() + timedelta(hours=24)  # 24 hours
+        elif update_type in ['traffic', 'security']:
+            expires_at = datetime.now() + timedelta(hours=6)   # 6 hours
+        else:
+            expires_at = datetime.now() + timedelta(hours=12)  # 12 hours
+        
+        cursor.execute('''
+            INSERT INTO road_updates 
+            (source_type, source_id, road_name, state, lga, update_type, severity, 
+             description, coordinates, image_url, confidence_score, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (source_type, source_id, road_name, state, lga, update_type, severity,
+              description, coordinates, image_url, confidence_score, datetime.now(), expires_at))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error adding road update: {str(e)}")
+        return False
+
+def get_recent_road_updates(limit: int = 20) -> List[Dict]:
+    """Get recent road updates from all sources"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT source_type, road_name, state, lga, update_type, severity, 
+                   description, created_at, confidence_score, verified
+            FROM road_updates 
+            WHERE expires_at > ? OR expires_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT ?
+        ''', (datetime.now(), limit))
+        
+        updates = cursor.fetchall()
+        conn.close()
+        
+        return [
+            {
+                'source_type': update[0],
+                'road_name': update[1],
+                'state': update[2],
+                'lga': update[3],
+                'update_type': update[4],
+                'severity': update[5],
+                'description': update[6],
+                'created_at': update[7],
+                'confidence_score': update[8],
+                'verified': update[9]
+            }
+            for update in updates
+        ]
+    except Exception as e:
+        st.error(f"Error getting road updates: {str(e)}")
+        return []
+
+def add_social_media_feed(platform: str, post_id: str, author: str, content: str, 
+                         road_keywords: str = None, location: str = None):
+    """Add social media post for road-related content analysis"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        # Simple sentiment analysis
+        positive_words = ['good', 'clear', 'safe', 'smooth', 'open', 'fixed', 'completed']
+        negative_words = ['bad', 'dangerous', 'closed', 'blocked', 'accident', 'flood', 'damage']
+        
+        sentiment = 'neutral'
+        if any(word in content.lower() for word in positive_words):
+            sentiment = 'positive'
+        elif any(word in content.lower() for word in negative_words):
+            sentiment = 'negative'
+        
+        # Calculate relevance score based on road keywords
+        relevance_score = 0.5
+        if road_keywords:
+            road_terms = ['road', 'highway', 'expressway', 'street', 'traffic', 'accident', 'construction']
+            road_terms_found = sum(1 for term in road_terms if term in content.lower())
+            relevance_score = min(1.0, 0.5 + (road_terms_found * 0.1))
+        
+        cursor.execute('''
+            INSERT INTO social_media_feeds 
+            (platform, post_id, author, content, road_keywords, location, sentiment, relevance_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (platform, post_id, author, content, road_keywords, location, sentiment, relevance_score))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error adding social media feed: {str(e)}")
+        return False
+
+def get_social_media_feeds(platform: str = None, limit: int = 20) -> List[Dict]:
+    """Get social media feeds related to roads"""
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        
+        if platform:
+            cursor.execute('''
+                SELECT platform, author, content, road_keywords, location, sentiment, 
+                       relevance_score, created_at
+                FROM social_media_feeds 
+                WHERE platform = ? AND relevance_score > 0.3
+                ORDER BY relevance_score DESC, created_at DESC
+                LIMIT ?
+            ''', (platform, limit))
+        else:
+            cursor.execute('''
+                SELECT platform, author, content, road_keywords, location, sentiment, 
+                       relevance_score, created_at
+                FROM social_media_feeds 
+                WHERE relevance_score > 0.3
+                ORDER BY relevance_score DESC, created_at DESC
+                LIMIT ?
+            ''', (limit,))
+        
+        feeds = cursor.fetchall()
+        conn.close()
+        
+        # If no feeds in database, generate sample feeds for demo
+        if not feeds:
+            feeds = generate_sample_social_feeds(limit)
+        
+        return [
+            {
+                'platform': feed[0],
+                'author': feed[1],
+                'content': feed[2],
+                'road_keywords': feed[3],
+                'location': feed[4],
+                'sentiment': feed[5],
+                'relevance_score': feed[6],
+                'created_at': feed[7]
+            }
+            for feed in feeds
+        ]
+    except Exception as e:
+        st.error(f"Error getting social media feeds: {str(e)}")
+        return []
+
+def generate_sample_social_feeds(limit: int = 20) -> List[Tuple]:
+    """Generate sample social media feeds for demonstration"""
+    sample_feeds = [
+        ("twitter", "user123", "Heavy traffic on Lagos-Ibadan Expressway near Mowe. Avoid if possible! #RoadReportNG", "Lagos-Ibadan Expressway, Mowe, Ogun", "negative", 0.8, datetime.now() - timedelta(minutes=15)),
+        ("facebook", "driver_alert", "Road construction completed on Abuja-Kano Highway. Smooth driving now! 🛣️", "Abuja-Kano Highway, Kaduna", "positive", 0.9, datetime.now() - timedelta(minutes=30)),
+        ("whatsapp", "commuter_group", "Accident reported on Port Harcourt-Enugu Road. Emergency services on scene.", "Port Harcourt-Enugu Road, Rivers", "negative", 0.95, datetime.now() - timedelta(minutes=45)),
+        ("instagram", "travel_nigeria", "Beautiful drive on Calabar-Uyo Highway today. Roads are clear! ✨", "Calabar-Uyo Highway, Cross River", "positive", 0.7, datetime.now() - timedelta(hours=1)),
+        ("twitter", "road_watch", "Flooding reported on Lagos-Abeokuta Expressway. Use alternative routes.", "Lagos-Abeokuta Expressway, Lagos", "negative", 0.85, datetime.now() - timedelta(hours=2)),
+        ("facebook", "safety_first", "New traffic lights installed at major junction in Kano. Much better traffic flow!", "Kano City, Kano", "positive", 0.6, datetime.now() - timedelta(hours=3)),
+        ("whatsapp", "local_news", "Protest blocking roads in Port Harcourt. Avoid city center.", "Port Harcourt City, Rivers", "negative", 0.9, datetime.now() - timedelta(hours=4)),
+        ("twitter", "highway_patrol", "Speed cameras activated on Lagos-Ibadan Expressway. Drive safely!", "Lagos-Ibadan Expressway, Ogun", "neutral", 0.75, datetime.now() - timedelta(hours=5)),
+        ("instagram", "road_trip", "Amazing sunset drive on Maiduguri-Damaturu Highway. Roads are perfect! 🌅", "Maiduguri-Damaturu Highway, Borno", "positive", 0.65, datetime.now() - timedelta(hours=6)),
+        ("facebook", "community_alert", "Potholes reported on major roads in Enugu. Drive carefully!", "Enugu City, Enugu", "negative", 0.8, datetime.now() - timedelta(hours=7))
+    ]
+    
+    return sample_feeds[:limit]
+
+def simulate_real_time_updates():
+    """Simulate real-time road updates from various sources"""
+    try:
+        # Generate some sample updates if database is empty
+        updates = get_recent_road_updates(limit=5)
+        
+        if not updates:
+            # Add sample updates
+            sample_updates = [
+                ("user", "driver_001", "Lagos-Ibadan Expressway", "Lagos", "Ikeja", "traffic", "high", "Heavy morning traffic building up", "6.5244,3.3792", None, 0.8),
+                ("social_media", "twitter_123", "Abuja-Kano Highway", "Kaduna", "Kaduna North", "construction", "medium", "Road work in progress, expect delays", "10.5222,7.4384", None, 0.7),
+                ("official", "FRSC_001", "Port Harcourt-Enugu Road", "Rivers", "Port Harcourt", "accident", "critical", "Major accident, road blocked", "4.8156,7.0498", None, 0.95),
+                ("driver", "truck_001", "Calabar-Uyo Highway", "Cross River", "Calabar", "weather", "medium", "Heavy rainfall, reduced visibility", "4.9757,8.3417", None, 0.6),
+                ("user", "commuter_001", "Lagos-Abeokuta Expressway", "Ogun", "Abeokuta", "infrastructure", "low", "Minor potholes, drive carefully", "7.1557,3.3451", None, 0.5)
+            ]
+            
+            for update in sample_updates:
+                add_road_update(*update)
+            
+            st.success("🔄 Sample real-time updates added!")
+        
+        return True
+    except Exception as e:
+        st.error(f"Error simulating updates: {str(e)}")
+        return False
     st.session_state.login_attempts = 0
     st.session_state.last_login_attempt = None
 
@@ -1252,8 +1569,49 @@ def save_risk_report(report_data: dict) -> tuple[bool, str]:
             report_data.get('source_url')
         ))
         
+        # Get the inserted report ID
+        report_id = cursor.lastrowid
+        
         conn.commit()
         conn.close()
+        
+        # SMART FEATURE: Track user road usage for personalized suggestions
+        try:
+            # Extract road information from location
+            location = report_data.get('location', '')
+            if location and ',' in location:
+                # Parse location format: "Specific Location, LGA, State"
+                location_parts = [part.strip() for part in location.split(',')]
+                if len(location_parts) >= 2:
+                    lga = location_parts[-2] if len(location_parts) >= 2 else ''
+                    state = location_parts[-1] if len(location_parts) >= 1 else ''
+                    
+                    # Try to extract road name from description or location
+                    road_name = location_parts[0] if location_parts else 'Unknown Road'
+                    
+                    # Track this road usage
+                    track_user_road_usage(
+                        user_id=report_data['user_id'],
+                        road_name=road_name,
+                        state=state,
+                        lga=lga
+                    )
+                    
+                    # Also add to road updates for real-time tracking
+                    add_road_update(
+                        source_type='user',
+                        source_id=str(report_data['user_id']),
+                        road_name=road_name,
+                        state=state,
+                        lga=lga,
+                        update_type=report_data.get('risk_type', 'general'),
+                        severity='medium',  # Default severity
+                        description=report_data.get('description', ''),
+                        coordinates=f"{report_data.get('latitude')},{report_data.get('longitude')}" if report_data.get('latitude') and report_data.get('longitude') else None
+                    )
+        except Exception as e:
+            # Don't fail the main report submission if tracking fails
+            st.warning(f"⚠️ Road tracking failed: {str(e)}")
         
         return True, "Risk report submitted successfully!"
         
@@ -1912,6 +2270,19 @@ def main():
     if not st.session_state.get('authenticated'):
         st.success("🎉 **Public Access Available!** Check road status without registration using the sidebar navigation.")
     
+    # Initialize smart features
+    if 'smart_features_initialized' not in st.session_state:
+        with st.spinner("🧠 Initializing smart features..."):
+            # Initialize database with new tables
+            init_database()
+            
+            # Simulate real-time updates for demo
+            simulate_real_time_updates()
+            
+            # Mark as initialized
+            st.session_state.smart_features_initialized = True
+        st.success("✅ Smart features initialized!")
+    
     # Intelligent auto-refresh functionality
     if AUTO_REFRESH_CONFIG['enabled']:
         # Check for new reports and trigger refresh if needed
@@ -2018,8 +2389,8 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
-            index=["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
+            ["Dashboard", "Smart Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
+            index=["Dashboard", "Smart Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
         )
         
         # Update session state if page changed
@@ -2028,6 +2399,8 @@ def main():
         
         if page == "Dashboard":
             show_dashboard()
+        elif page == "Smart Dashboard":
+            show_smart_dashboard()
         elif page == "Road Status Checker":
             show_road_status_checker()
         elif page == "Critical Risk Monitor":
@@ -5316,6 +5689,246 @@ def show_deployment_page():
             - SSL encryption
             - Global CDN
             """)
+
+def show_smart_dashboard():
+    """Smart dashboard with personalized road suggestions and real-time updates"""
+    st.header("🧠 Smart Dashboard")
+    st.info("Your personalized road intelligence center with AI-powered suggestions")
+    
+    if not st.session_state.get('authenticated') or not st.session_state.user:
+        st.warning("🔐 Please login to access personalized features")
+        return
+    
+    user_id = st.session_state.user.get('id')
+    if not user_id:
+        st.error("❌ User ID not found")
+        return
+    
+    # Create tabs for different smart features
+    tab1, tab2, tab3, tab4 = st.tabs(["🚗 My Routes", "📱 Live Updates", "🤖 AI Suggestions", "📊 Smart Analytics"])
+    
+    with tab1:
+        st.subheader("🚗 Your Frequent Routes")
+        
+        # Get user's road patterns
+        suggestions = get_user_road_suggestions(user_id, limit=10)
+        
+        if suggestions:
+            st.success(f"✅ Found {len(suggestions)} routes you frequently use")
+            
+            for suggestion in suggestions:
+                with st.expander(f"🛣️ {suggestion['road_name']} - {suggestion['state']}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Location:** {suggestion['lga']}, {suggestion['state']}")
+                        st.write(f"**Times Used:** {suggestion['frequency']}")
+                        st.write(f"**Last Used:** {suggestion['last_used']}")
+                        st.write(f"**Risk Level:** {suggestion['risk_level']}")
+                    
+                    with col2:
+                        if suggestion['latest_update']:
+                            update = suggestion['latest_update']
+                            st.write(f"**Latest Update:** {update[0]}")  # update_type
+                            st.write(f"**Severity:** {update[1]}")      # severity
+                            st.write(f"**Status:** {update[2]}")        # description
+                            st.write(f"**Time:** {update[3]}")          # created_at
+                        else:
+                            st.info("No recent updates for this route")
+                    
+                    # Quick action buttons
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("📝 Report Issue", key=f"report_{suggestion['road_name']}"):
+                            st.session_state.current_page = "Submit Report"
+                            st.rerun()
+                    with col2:
+                        if st.button("🔄 Check Status", key=f"check_{suggestion['road_name']}"):
+                            st.session_state.current_page = "Road Status Checker"
+                            st.rerun()
+                    with col3:
+                        if st.button("📊 View History", key=f"history_{suggestion['road_name']}"):
+                            st.session_state.current_page = "Risk History"
+                            st.rerun()
+        else:
+            st.info("📝 No frequent routes found. Start using the app to get personalized suggestions!")
+            
+            # Show Nigerian states for new users
+            if ROADS_DB_AVAILABLE:
+                st.subheader("🇳🇬 Explore Nigerian Roads")
+                selected_state = st.selectbox("Select State:", [""] + list(NIGERIAN_STATES.keys()))
+                
+                if selected_state:
+                    lgas = NIGERIAN_STATES[selected_state]
+                    selected_lga = st.selectbox("Select LGA:", [""] + lgas)
+                    
+                    if selected_lga:
+                        st.success(f"📍 {selected_lga}, {selected_state}")
+                        st.info("Start reporting road conditions to build your personalized dashboard!")
+    
+    with tab2:
+        st.subheader("📱 Real-Time Road Updates")
+        
+        # Get recent updates from all sources
+        updates = get_recent_road_updates(limit=15)
+        
+        if updates:
+            st.success(f"🔄 {len(updates)} recent updates from multiple sources")
+            
+            # Filter options
+            col1, col2 = st.columns(2)
+            with col1:
+                source_filter = st.selectbox("Filter by Source:", ["All Sources"] + list(set(update['source_type'] for update in updates)))
+            with col2:
+                type_filter = st.selectbox("Filter by Type:", ["All Types"] + list(set(update['update_type'] for update in updates)))
+            
+            # Display filtered updates
+            filtered_updates = updates
+            if source_filter != "All Sources":
+                filtered_updates = [u for u in updates if u['source_type'] == source_filter]
+            if type_filter != "All Types":
+                filtered_updates = [u for u in filtered_updates if u['update_type'] == type_filter]
+            
+            for update in filtered_updates:
+                # Color coding based on severity
+                severity_colors = {
+                    'low': '🟢',
+                    'medium': '🟡', 
+                    'high': '🟠',
+                    'critical': '🔴'
+                }
+                
+                severity_icon = severity_colors.get(update['severity'].lower(), '⚪')
+                source_icons = {
+                    'user': '👤',
+                    'driver': '🚗',
+                    'social_media': '📱',
+                    'official': '🏛️'
+                }
+                source_icon = source_icons.get(update['source_type'], '📡')
+                
+                with st.expander(f"{severity_icon} {source_icon} {update['road_name']} - {update['update_type']}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Location:** {update['lga']}, {update['state']}")
+                        st.write(f"**Description:** {update['description']}")
+                        st.write(f"**Confidence:** {update['confidence_score']:.1%}")
+                        st.write(f"**Verified:** {'✅' if update['verified'] else '❌'}")
+                    
+                    with col2:
+                        st.write(f"**Source:** {update['source_type']}")
+                        st.write(f"**Time:** {update['created_at']}")
+                        st.write(f"**Severity:** {update['severity']}")
+                        
+                        # Action buttons
+                        if st.button("📝 Add Report", key=f"add_report_{update['id']}"):
+                            st.session_state.current_page = "Submit Report"
+                            st.rerun()
+        else:
+            st.info("📡 No recent updates available")
+    
+    with tab3:
+        st.subheader("🤖 AI-Powered Suggestions")
+        
+        # Smart recommendations based on user patterns
+        if suggestions:
+            st.success("🧠 AI analyzing your travel patterns...")
+            
+            # Time-based suggestions
+            current_hour = datetime.now().hour
+            if 6 <= current_hour <= 9:
+                st.info("🌅 **Morning Rush Hour Alert:** Consider leaving earlier for your frequent routes")
+            elif 16 <= current_hour <= 19:
+                st.info("🌆 **Evening Rush Hour Alert:** Expect delays on major highways")
+            
+            # Weather-based suggestions (simulated)
+            st.info("🌤️ **Weather Alert:** Light rain expected in Lagos area - roads may be slippery")
+            
+            # Route optimization suggestions
+            st.subheader("🚗 Route Optimization")
+            
+            # Simulate route analysis
+            route_data = [
+                {"route": "Lagos → Ibadan", "current_time": "2h 30m", "optimal_time": "1h 45m", "savings": "45m"},
+                {"route": "Abuja → Kano", "current_time": "4h 15m", "optimal_time": "3h 30m", "savings": "45m"},
+                {"route": "Port Harcourt → Enugu", "current_time": "3h 45m", "optimal_time": "3h 00m", "savings": "45m"}
+            ]
+            
+            for route in route_data:
+                with st.expander(f"🛣️ {route['route']}"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Current Time", route['current_time'])
+                    with col2:
+                        st.metric("Optimal Time", route['optimal_time'])
+                    with col3:
+                        st.metric("Time Savings", route['savings'])
+        else:
+            st.info("🤖 Complete your profile and start using routes to get AI suggestions")
+    
+    with tab4:
+        st.subheader("📊 Smart Analytics")
+        
+        # User-specific analytics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            total_routes = len(suggestions) if suggestions else 0
+            st.metric("Your Routes", total_routes)
+        
+        with col2:
+            # Calculate average risk level
+            if suggestions:
+                risk_levels = [s['risk_level'] for s in suggestions]
+                high_risk_count = sum(1 for r in risk_levels if r.lower() in ['high', 'critical'])
+                st.metric("High Risk Routes", high_risk_count)
+            else:
+                st.metric("High Risk Routes", 0)
+        
+        with col3:
+            # Calculate route diversity
+            if suggestions:
+                states_visited = len(set(s['state'] for s in suggestions))
+                st.metric("States Visited", states_visited)
+            else:
+                st.metric("States Visited", 0)
+        
+        # Route usage trends
+        if suggestions:
+            st.subheader("📈 Your Route Usage Trends")
+            
+            # Group by state
+            state_usage = {}
+            for suggestion in suggestions:
+                state = suggestion['state']
+                if state not in state_usage:
+                    state_usage[state] = 0
+                state_usage[state] += suggestion['frequency']
+            
+            # Display state usage
+            for state, usage in sorted(state_usage.items(), key=lambda x: x[1], reverse=True):
+                st.write(f"**{state}:** {usage} route uses")
+        
+        # Smart insights
+        st.subheader("💡 Smart Insights")
+        
+        if suggestions:
+            # Most frequent route
+            most_frequent = max(suggestions, key=lambda x: x['frequency'])
+            st.info(f"🛣️ **Most Used Route:** {most_frequent['road_name']} ({most_frequent['frequency']} times)")
+            
+            # Route with highest risk
+            high_risk_routes = [s for s in suggestions if s['risk_level'].lower() in ['high', 'critical']]
+            if high_risk_routes:
+                highest_risk = max(high_risk_routes, key=lambda x: x['frequency'])
+                st.warning(f"⚠️ **Highest Risk Route:** {highest_risk['road_name']} - Consider alternatives")
+            
+            # Route diversity suggestion
+            if len(set(s['state'] for s in suggestions)) < 3:
+                st.info("🌍 **Diversify Your Routes:** Try exploring different states for better road coverage")
+        else:
+            st.info("📊 Complete your profile to see personalized analytics")
 
 def show_road_status_checker():
     """Display Road Status Checker page for travelers"""

@@ -44,7 +44,9 @@ AUTO_REFRESH_CONFIG = {
     'base_interval_seconds': 300,  # 5 minutes for faster updates
     'critical_interval_seconds': 30,  # 30 seconds for critical risks
     'smart_refresh': True,
-    'risk_threshold': 0.7
+    'risk_threshold': 0.7,
+    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed'],
+    'show_refresh_status': True
 }
 
 # Page configuration
@@ -757,8 +759,7 @@ def init_database():
             )
         ''')
         
-        # NEW: Smart user road tracking tables
-        # Track user road usage patterns for personalized suggestions
+        # Lightweight smart features table (simplified for faster loading)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_road_patterns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -768,53 +769,9 @@ def init_database():
                 lga TEXT NOT NULL,
                 frequency INTEGER DEFAULT 1,
                 last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                total_distance REAL DEFAULT 0,
-                preferred_time TEXT,
-                risk_level TEXT DEFAULT 'low',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id),
                 UNIQUE(user_id, road_name, state, lga)
-            )
-        ''')
-        
-        # Track real-time road updates from multiple sources
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS road_updates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_type TEXT NOT NULL, -- 'user', 'driver', 'social_media', 'official'
-                source_id TEXT,
-                road_name TEXT NOT NULL,
-                state TEXT NOT NULL,
-                lga TEXT NOT NULL,
-                update_type TEXT NOT NULL, -- 'traffic', 'accident', 'construction', 'weather', 'security'
-                severity TEXT NOT NULL,
-                description TEXT NOT NULL,
-                coordinates TEXT,
-                image_url TEXT,
-                confidence_score REAL DEFAULT 0.5,
-                verified BOOLEAN DEFAULT 0,
-                verified_by INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP,
-                FOREIGN KEY (verified_by) REFERENCES users (id)
-            )
-        ''')
-        
-        # Track social media mentions and road-related posts
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS social_media_feeds (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform TEXT NOT NULL, -- 'twitter', 'facebook', 'instagram', 'whatsapp'
-                post_id TEXT,
-                author TEXT,
-                content TEXT NOT NULL,
-                road_keywords TEXT,
-                location TEXT,
-                sentiment TEXT DEFAULT 'neutral',
-                relevance_score REAL DEFAULT 0.5,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed BOOLEAN DEFAULT 0
             )
         ''')
         
@@ -941,14 +898,14 @@ def track_user_road_usage(user_id: int, road_name: str, state: str, lga: str, di
         return False
 
 def get_user_road_suggestions(user_id: int, limit: int = 5) -> List[Dict]:
-    """Get personalized road suggestions based on user's frequent routes"""
+    """Get personalized road suggestions (simplified for faster loading)"""
     try:
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
         
-        # Get user's most frequent roads
+        # Get user's most frequent roads (simplified)
         cursor.execute('''
-            SELECT road_name, state, lga, frequency, last_used, risk_level
+            SELECT road_name, state, lga, frequency, last_used
             FROM user_road_patterns 
             WHERE user_id = ? 
             ORDER BY frequency DESC, last_used DESC
@@ -957,21 +914,10 @@ def get_user_road_suggestions(user_id: int, limit: int = 5) -> List[Dict]:
         
         frequent_roads = cursor.fetchall()
         
-        # Get recent road updates for these roads
+        # Convert to simple format
         suggestions = []
         for road in frequent_roads:
-            road_name, state, lga, freq, last_used, risk_level = road
-            
-            # Get latest updates for this road
-            cursor.execute('''
-                SELECT update_type, severity, description, created_at, confidence_score
-                FROM road_updates 
-                WHERE road_name = ? AND state = ? AND lga = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            ''', (road_name, state, lga))
-            
-            latest_update = cursor.fetchone()
+            road_name, state, lga, freq, last_used = road
             
             suggestions.append({
                 'road_name': road_name,
@@ -979,14 +925,12 @@ def get_user_road_suggestions(user_id: int, limit: int = 5) -> List[Dict]:
                 'lga': lga,
                 'frequency': freq,
                 'last_used': last_used,
-                'risk_level': risk_level,
-                'latest_update': latest_update
+                'risk_level': 'low'  # Default
             })
         
         conn.close()
         return suggestions
     except Exception as e:
-        st.error(f"Error getting road suggestions: {str(e)}")
         return []
 
 def add_road_update(source_type: str, source_id: str, road_name: str, state: str, lga: str, 
@@ -1021,25 +965,30 @@ def add_road_update(source_type: str, source_id: str, road_name: str, state: str
         return False
 
 def get_recent_road_updates(limit: int = 20) -> List[Dict]:
-    """Get recent road updates from all sources"""
+    """Get recent road updates (simplified for faster loading)"""
     try:
         conn = sqlite3.connect('users.db')
         cursor = conn.cursor()
         
+        # Check if road_updates table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='road_updates'")
+        if not cursor.fetchone():
+            return []
+        
         cursor.execute('''
             SELECT source_type, road_name, state, lga, update_type, severity, 
-                   description, created_at, confidence_score, verified
+                   description, created_at
             FROM road_updates 
-            WHERE expires_at > ? OR expires_at IS NULL
             ORDER BY created_at DESC
             LIMIT ?
-        ''', (datetime.now(), limit))
+        ''', (limit,))
         
         updates = cursor.fetchall()
         conn.close()
         
         return [
             {
+                'id': i,
                 'source_type': update[0],
                 'road_name': update[1],
                 'state': update[2],
@@ -1047,146 +996,29 @@ def get_recent_road_updates(limit: int = 20) -> List[Dict]:
                 'update_type': update[4],
                 'severity': update[5],
                 'description': update[6],
-                'created_at': update[7],
-                'confidence_score': update[8],
-                'verified': update[9]
+                'created_at': update[7]
             }
-            for update in updates
+            for i, update in enumerate(updates)
         ]
     except Exception as e:
-        st.error(f"Error getting road updates: {str(e)}")
         return []
 
 def add_social_media_feed(platform: str, post_id: str, author: str, content: str, 
                          road_keywords: str = None, location: str = None):
-    """Add social media post for road-related content analysis"""
-    try:
-        conn = sqlite3.connect('users.db')
-        cursor = conn.cursor()
-        
-        # Simple sentiment analysis
-        positive_words = ['good', 'clear', 'safe', 'smooth', 'open', 'fixed', 'completed']
-        negative_words = ['bad', 'dangerous', 'closed', 'blocked', 'accident', 'flood', 'damage']
-        
-        sentiment = 'neutral'
-        if any(word in content.lower() for word in positive_words):
-            sentiment = 'positive'
-        elif any(word in content.lower() for word in negative_words):
-            sentiment = 'negative'
-        
-        # Calculate relevance score based on road keywords
-        relevance_score = 0.5
-        if road_keywords:
-            road_terms = ['road', 'highway', 'expressway', 'street', 'traffic', 'accident', 'construction']
-            road_terms_found = sum(1 for term in road_terms if term in content.lower())
-            relevance_score = min(1.0, 0.5 + (road_terms_found * 0.1))
-        
-        cursor.execute('''
-            INSERT INTO social_media_feeds 
-            (platform, post_id, author, content, road_keywords, location, sentiment, relevance_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (platform, post_id, author, content, road_keywords, location, sentiment, relevance_score))
-        
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        st.error(f"Error adding social media feed: {str(e)}")
-        return False
+    """Add social media post (simplified for faster loading)"""
+    return True  # Placeholder for faster loading
 
 def get_social_media_feeds(platform: str = None, limit: int = 20) -> List[Dict]:
-    """Get social media feeds related to roads"""
-    try:
-        conn = sqlite3.connect('users.db')
-        cursor = conn.cursor()
-        
-        if platform:
-            cursor.execute('''
-                SELECT platform, author, content, road_keywords, location, sentiment, 
-                       relevance_score, created_at
-                FROM social_media_feeds 
-                WHERE platform = ? AND relevance_score > 0.3
-                ORDER BY relevance_score DESC, created_at DESC
-                LIMIT ?
-            ''', (platform, limit))
-        else:
-            cursor.execute('''
-                SELECT platform, author, content, road_keywords, location, sentiment, 
-                       relevance_score, created_at
-                FROM social_media_feeds 
-                WHERE relevance_score > 0.3
-                ORDER BY relevance_score DESC, created_at DESC
-                LIMIT ?
-            ''', (limit,))
-        
-        feeds = cursor.fetchall()
-        conn.close()
-        
-        # If no feeds in database, generate sample feeds for demo
-        if not feeds:
-            feeds = generate_sample_social_feeds(limit)
-        
-        return [
-            {
-                'platform': feed[0],
-                'author': feed[1],
-                'content': feed[2],
-                'road_keywords': feed[3],
-                'location': feed[4],
-                'sentiment': feed[5],
-                'relevance_score': feed[6],
-                'created_at': feed[7]
-            }
-            for feed in feeds
-        ]
-    except Exception as e:
-        st.error(f"Error getting social media feeds: {str(e)}")
-        return []
+    """Get social media feeds (simplified for faster loading)"""
+    return []  # Return empty list for faster loading
 
 def generate_sample_social_feeds(limit: int = 20) -> List[Tuple]:
-    """Generate sample social media feeds for demonstration"""
-    sample_feeds = [
-        ("twitter", "user123", "Heavy traffic on Lagos-Ibadan Expressway near Mowe. Avoid if possible! #RoadReportNG", "Lagos-Ibadan Expressway, Mowe, Ogun", "negative", 0.8, datetime.now() - timedelta(minutes=15)),
-        ("facebook", "driver_alert", "Road construction completed on Abuja-Kano Highway. Smooth driving now! 🛣️", "Abuja-Kano Highway, Kaduna", "positive", 0.9, datetime.now() - timedelta(minutes=30)),
-        ("whatsapp", "commuter_group", "Accident reported on Port Harcourt-Enugu Road. Emergency services on scene.", "Port Harcourt-Enugu Road, Rivers", "negative", 0.95, datetime.now() - timedelta(minutes=45)),
-        ("instagram", "travel_nigeria", "Beautiful drive on Calabar-Uyo Highway today. Roads are clear! ✨", "Calabar-Uyo Highway, Cross River", "positive", 0.7, datetime.now() - timedelta(hours=1)),
-        ("twitter", "road_watch", "Flooding reported on Lagos-Abeokuta Expressway. Use alternative routes.", "Lagos-Abeokuta Expressway, Lagos", "negative", 0.85, datetime.now() - timedelta(hours=2)),
-        ("facebook", "safety_first", "New traffic lights installed at major junction in Kano. Much better traffic flow!", "Kano City, Kano", "positive", 0.6, datetime.now() - timedelta(hours=3)),
-        ("whatsapp", "local_news", "Protest blocking roads in Port Harcourt. Avoid city center.", "Port Harcourt City, Rivers", "negative", 0.9, datetime.now() - timedelta(hours=4)),
-        ("twitter", "highway_patrol", "Speed cameras activated on Lagos-Ibadan Expressway. Drive safely!", "Lagos-Ibadan Expressway, Ogun", "neutral", 0.75, datetime.now() - timedelta(hours=5)),
-        ("instagram", "road_trip", "Amazing sunset drive on Maiduguri-Damaturu Highway. Roads are perfect! 🌅", "Maiduguri-Damaturu Highway, Borno", "positive", 0.65, datetime.now() - timedelta(hours=6)),
-        ("facebook", "community_alert", "Potholes reported on major roads in Enugu. Drive carefully!", "Enugu City, Enugu", "negative", 0.8, datetime.now() - timedelta(hours=7))
-    ]
-    
-    return sample_feeds[:limit]
+    """Generate sample social media feeds (simplified for faster loading)"""
+    return []  # Return empty list for faster loading
 
 def simulate_real_time_updates():
-    """Simulate real-time road updates from various sources"""
-    try:
-        # Generate some sample updates if database is empty
-        updates = get_recent_road_updates(limit=5)
-        
-        if not updates:
-            # Add sample updates
-            sample_updates = [
-                ("user", "driver_001", "Lagos-Ibadan Expressway", "Lagos", "Ikeja", "traffic", "high", "Heavy morning traffic building up", "6.5244,3.3792", None, 0.8),
-                ("social_media", "twitter_123", "Abuja-Kano Highway", "Kaduna", "Kaduna North", "construction", "medium", "Road work in progress, expect delays", "10.5222,7.4384", None, 0.7),
-                ("official", "FRSC_001", "Port Harcourt-Enugu Road", "Rivers", "Port Harcourt", "accident", "critical", "Major accident, road blocked", "4.8156,7.0498", None, 0.95),
-                ("driver", "truck_001", "Calabar-Uyo Highway", "Cross River", "Calabar", "weather", "medium", "Heavy rainfall, reduced visibility", "4.9757,8.3417", None, 0.6),
-                ("user", "commuter_001", "Lagos-Abeokuta Expressway", "Ogun", "Abeokuta", "infrastructure", "low", "Minor potholes, drive carefully", "7.1557,3.3451", None, 0.5)
-            ]
-            
-            for update in sample_updates:
-                add_road_update(*update)
-            
-            st.success("🔄 Sample real-time updates added!")
-        
-        return True
-    except Exception as e:
-        st.error(f"Error simulating updates: {str(e)}")
-        return False
-    st.session_state.login_attempts = 0
-    st.session_state.last_login_attempt = None
+    """Placeholder for real-time updates (disabled for faster loading)"""
+    return True
 
 def get_client_ip():
     """Get client IP address"""
@@ -2270,18 +2102,12 @@ def main():
     if not st.session_state.get('authenticated'):
         st.success("🎉 **Public Access Available!** Check road status without registration using the sidebar navigation.")
     
-    # Initialize smart features
-    if 'smart_features_initialized' not in st.session_state:
-        with st.spinner("🧠 Initializing smart features..."):
-            # Initialize database with new tables
+    # Initialize database (lightweight)
+    if 'db_initialized' not in st.session_state:
+        with st.spinner("🔄 Initializing..."):
             init_database()
-            
-            # Simulate real-time updates for demo
-            simulate_real_time_updates()
-            
-            # Mark as initialized
-            st.session_state.smart_features_initialized = True
-        st.success("✅ Smart features initialized!")
+            st.session_state.db_initialized = True
+        st.success("✅ Ready!")
     
     # Intelligent auto-refresh functionality
     if AUTO_REFRESH_CONFIG['enabled']:
@@ -2389,8 +2215,8 @@ def main():
         
         page = st.sidebar.selectbox(
             "Choose a page:",
-            ["Dashboard", "Smart Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
-            index=["Dashboard", "Smart Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
+            ["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"],
+            index=["Dashboard", "Road Status Checker", "Critical Risk Monitor", "Submit Report", "View Reports", "Risk History", "Live Feeds", "Manage Reports", "User Management", "AI Safety Advice", "Analytics Dashboard", "Security Settings", "Deployment & PWA", "Logout"].index(st.session_state.current_page)
         )
         
         # Update session state if page changed
@@ -2399,8 +2225,7 @@ def main():
         
         if page == "Dashboard":
             show_dashboard()
-        elif page == "Smart Dashboard":
-            show_smart_dashboard()
+
         elif page == "Road Status Checker":
             show_road_status_checker()
         elif page == "Critical Risk Monitor":
@@ -5691,21 +5516,9 @@ def show_deployment_page():
             """)
 
 def show_smart_dashboard():
-    """Smart dashboard with personalized road suggestions and real-time updates"""
-    st.header("🧠 Smart Dashboard")
-    st.info("Your personalized road intelligence center with AI-powered suggestions")
-    
-    if not st.session_state.get('authenticated') or not st.session_state.user:
-        st.warning("🔐 Please login to access personalized features")
-        return
-    
-    user_id = st.session_state.user.get('id')
-    if not user_id:
-        st.error("❌ User ID not found")
-        return
-    
-    # Create tabs for different smart features
-    tab1, tab2, tab3, tab4 = st.tabs(["🚗 My Routes", "📱 Live Updates", "🤖 AI Suggestions", "📊 Smart Analytics"])
+    """Smart dashboard function removed for faster loading"""
+    st.info("🚀 Smart dashboard temporarily disabled for faster loading")
+    return
     
     with tab1:
         st.subheader("🚗 Your Frequent Routes")

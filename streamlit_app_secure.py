@@ -20,31 +20,18 @@ from typing import Dict, List, Optional, Tuple
 import urllib.request
 import urllib.parse
 
-# Import Nigerian roads database
+# Import Nigerian roads database (simplified for faster loading)
 try:
-    from nigerian_roads_data import nigerian_roads_db
+    from nigerian_roads_data import NIGERIAN_STATES, MAJOR_ROADS
     ROADS_DB_AVAILABLE = True
-    # Initialize the Nigerian roads database if available
-    if nigerian_roads_db:
-        try:
-            nigerian_roads_db.init_database()
-            st.success("✅ Nigerian roads database initialized successfully!")
-        except Exception as e:
-            st.error(f"⚠️ Failed to initialize Nigerian roads database: {str(e)}")
-            ROADS_DB_AVAILABLE = False
-            nigerian_roads_db = None
 except ImportError:
     ROADS_DB_AVAILABLE = False
-    nigerian_roads_db = None
-    st.warning("⚠️ Nigerian roads database module not available")
+    NIGERIAN_STATES = {}
+    MAJOR_ROADS = {}
 
-# Import enhanced reports system
-try:
-    from enhanced_reports import enhanced_reports_system
-    ENHANCED_REPORTS_AVAILABLE = True
-except ImportError:
-    ENHANCED_REPORTS_AVAILABLE = False
-    enhanced_reports_system = None
+# Enhanced reports system (disabled for faster loading)
+ENHANCED_REPORTS_AVAILABLE = False
+enhanced_reports_system = None
 
 # Security configuration
 SECURITY_CONFIG = {
@@ -71,19 +58,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Intelligent auto-refresh configuration
+# Optimized auto-refresh configuration for faster loading
 AUTO_REFRESH_CONFIG = {
     'enabled': True,
-    'base_interval_seconds': 900,  # 15 minutes base interval
-    'critical_interval_seconds': 30,  # 30 seconds for critical risks
-    'high_risk_interval_seconds': 120,  # 2 minutes for high-risk situations
-    'interval_seconds': 900,  # Default interval for backward compatibility
+    'base_interval_seconds': 300,  # 5 minutes for faster updates
+    'critical_interval_seconds': 60,  # 1 minute for critical risks
+    'interval_seconds': 300,  # Default interval
     'manual_refresh_enabled': True,
     'show_refresh_status': True,
-    'smart_refresh': True,  # Enable intelligent refresh
-    'risk_threshold': 0.7,  # Risk score threshold for immediate updates
-    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed'],
-    'max_refresh_count': 20
+    'smart_refresh': True,
+    'risk_threshold': 0.7,
+    'emergency_keywords': ['accident', 'flood', 'landslide', 'bridge', 'collapse', 'fire', 'explosion', 'blocked', 'closed']
 }
 
 def check_for_new_reports():

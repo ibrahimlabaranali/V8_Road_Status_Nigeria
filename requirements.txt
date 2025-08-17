@@ -1,19 +1,6 @@
-# Requirements for Road Report Nigeria - Fast Loading
-# Optimized for Python 3.13+ and fast deployment
-
-# Core Streamlit - Latest stable version
 streamlit>=1.32.0
-
-# Data processing - Python 3.13+ compatible versions
 pandas>=2.1.0
 numpy>=1.26.0
-
-# HTTP requests - Lightweight versions
 requests>=2.31.0
 urllib3>=2.0.7
-
-# Environment variables - Essential only
 python-dotenv>=1.0.0
-
-# Note: Removed heavy packages that slow down deployment
-# These versions are pre-compiled wheels, no building required

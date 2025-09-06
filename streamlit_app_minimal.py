@@ -178,6 +178,7 @@ def get_demo_admin_data():
 def main():
     """Main application function"""
     st.markdown('<h1 class="main-header">🚧 Road Status Reporter - Minimal</h1>', unsafe_allow_html=True)
+    st.caption("Use of this app implies acceptance of the Terms & Conditions and Privacy Notice. Public content may be unverified.")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -449,7 +450,8 @@ def show_reports_page():
 def show_verified_reports_page():
     """Show only verified driver reports (requires login)."""
     st.markdown("## ✅ Verified Driver Reports")
-    reports = [r for r in get_demo_data() if r["status"] == "Verified"]
+    # Simulate genuineness by requiring both Verified status and Medium/High risk (as a proxy for moderation)
+    reports = [r for r in get_demo_data() if r["status"] == "Verified" and r["risk_level"] in ("Medium", "High")]
     if not reports:
         st.info("No verified reports available yet.")
         return
@@ -504,19 +506,20 @@ def show_create_report_page():
                 "Road Safety", "Infrastructure", "Traffic", "Environment", "Other"
             ])
         
-        # Allow adding roads for a state if none exist or to extend the list
-        with st.expander("Manage major roads for selected state"):
-            st.markdown("Provide a comma-separated list of major roads. Keep names concise and accurate.")
-            new_roads_csv = st.text_input("Add/Update roads for {}".format(state), placeholder="e.g., Ikorodu Road, Badagry Expressway")
-            if st.form_submit_button("Save Roads for State"):
-                new_roads = [r.strip() for r in new_roads_csv.split(",") if r.strip()]
-                if new_roads:
-                    add_roads_to_state(state, new_roads)
-                    st.success("Saved roads for {}".format(state))
-                    st.session_state["_roads_updated_ts"] = datetime.now().isoformat()
-                    st.rerun()
-                else:
-                    st.warning("Please enter at least one road name before saving.")
+        # Allow adding roads for a state if none exist or to extend the list (admins only)
+        if st.session_state.is_admin:
+            with st.expander("Manage major roads for selected state"):
+                st.markdown("Provide a comma-separated list of major roads. Keep names concise and accurate.")
+                new_roads_csv = st.text_input("Add/Update roads for {}".format(state), placeholder="e.g., Ikorodu Road, Badagry Expressway")
+                if st.form_submit_button("Save Roads for State"):
+                    new_roads = [r.strip() for r in new_roads_csv.split(",") if r.strip()]
+                    if new_roads:
+                        add_roads_to_state(state, new_roads)
+                        st.success("Saved roads for {}".format(state))
+                        st.session_state["_roads_updated_ts"] = datetime.now().isoformat()
+                        st.rerun()
+                    else:
+                        st.warning("Please enter at least one road name before saving.")
 
         # File upload
         uploaded_files = st.file_uploader(

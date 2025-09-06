@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import hashlib
+import random
 import folium
 from streamlit_folium import folium_static
 import json
@@ -122,13 +124,17 @@ def get_demo_data():
         state = list(states.keys())[i % len(states)]
         lga = states[state][i % len(states[state])]
         
+        # Spread points across Nigeria deterministically based on i
+        rng = random.Random(i * 9973)
+        lat = 4.3 + rng.random() * (13.9 - 4.3)  # approx Nigeria lat bounds
+        lon = 2.7 + rng.random() * (14.7 - 2.7)  # approx Nigeria lon bounds
         report = {
             "id": i + 1,
             "title": f"Road Issue in {lga}, {state}",
             "description": f"Reported road condition issue in {lga} area of {state} state.",
             "location": f"{lga}, {state}",
-            "latitude": 6.5244 + (i * 0.01),  # Around Lagos coordinates
-            "longitude": 3.3792 + (i * 0.01),
+            "latitude": round(lat, 4),
+            "longitude": round(lon, 4),
             "risk_level": risk_levels[i % len(risk_levels)],
             "road_condition": road_conditions[i % len(road_conditions)],
             "status": statuses[i % len(statuses)],
@@ -258,8 +264,7 @@ def show_login_page():
                 else:
                     st.error("Please enter both username and password")
         
-        st.info("💡 **Demo Mode**: Enter any username and password to continue")
-        st.info("🔑 **Admin Access**: Use 'admin/admin' for admin features")
+        # Intentionally no demo/admin hints for production-like UX
 
 def show_signup_page():
     """Signup/Login combined page for demo purposes."""
@@ -276,14 +281,20 @@ def show_signup_page():
                 su_username = st.text_input("Choose Username")
                 su_password = st.text_input("Choose Password", type="password")
                 su_confirm = st.text_input("Confirm Password", type="password")
+                nin = st.text_input("NIN (11 digits)")
                 submit_su = st.form_submit_button("Create Account")
                 if submit_su:
-                    if not su_username or not su_password:
+                    if not su_username or not su_password or not nin:
                         st.error("Username and password are required.")
                     elif su_password != su_confirm:
                         st.error("Passwords do not match.")
+                    elif not (nin.isdigit() and len(nin) == 11):
+                        st.error("Enter a valid 11-digit NIN.")
                     else:
-                        st.session_state._registered_users[su_username.lower()] = su_password
+                        st.session_state._registered_users[su_username.lower()] = {
+                            "password": su_password,
+                            "nin": nin
+                        }
                         st.session_state.user_authenticated = True
                         st.session_state.username = su_username
                         st.success("🎉 Account created and logged in!")
@@ -325,6 +336,7 @@ def show_dashboard():
             with col1:
                 st.markdown(f"**{report['title']}**")
                 st.markdown(f"📍 {report['location']}")
+                st.caption(f"Date: {report['created_at']} • Source: {report['user']}")
                 st.markdown(f"🔧 {report['road_condition']}")
             
             with col2:
@@ -424,7 +436,7 @@ def show_verified_reports_page():
 def show_public_feed():
     """Public social-media-like feed available without login."""
     st.markdown("## 📰 Public Feed")
-    st.caption("General community-submitted road status posts. Verified driver reports require login.")
+    st.caption("These posts are community-submitted and unverified. Information may be incomplete or inaccurate. For verified driver reports, please log in.")
     reports = get_demo_data()[:10]
     for report in reports:
         with st.container():
@@ -459,9 +471,8 @@ def show_create_report_page():
             ])
         
         with col2:
-            latitude = st.number_input("Latitude *", value=6.5244, format="%.4f")
-            longitude = st.number_input("Longitude *", value=3.3792, format="%.4f")
-            risk_level = st.selectbox("Risk Level *", ["Low", "Medium", "High"])
+            # Coordinates will be auto-generated; no manual inputs required
+            risk_level = st.selectbox("Risk Level *", ["Low", "Medium", "High"], index=1 if road_condition == "Construction" else 0)
             category = st.selectbox("Category", [
                 "Road Safety", "Infrastructure", "Traffic", "Environment", "Other"
             ])
@@ -493,6 +504,12 @@ def show_create_report_page():
             # Build location string from state and road (if provided)
             location_str = f"{road}, {state}" if road else state
             if title and description and state:
+                # Auto-generate coordinates deterministically from title+state for now
+                seed = int(hashlib.sha256(f"{title}-{state}-{road}".encode("utf-8")).hexdigest(), 16)
+                rng = random.Random(seed)
+                lat = 4.3 + rng.random() * (13.9 - 4.3)
+                lon = 2.7 + rng.random() * (14.7 - 2.7)
+                st.session_state["last_created_report_coords"] = (round(lat, 4), round(lon, 4))
                 st.success("✅ Report submitted successfully!")
                 st.balloons()
             else:

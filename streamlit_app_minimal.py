@@ -25,6 +25,18 @@ NIGERIA_STATES = [
     "Zamfara", "FCT Abuja"
 ]
 
+def _validate_password_strength(password: str):
+    """Return (ok, message). Enforces strong password policy."""
+    if not password or len(password) < 8:
+        return False, "Password must be at least 8 characters."
+    has_upper = any(c.isupper() for c in password)
+    has_lower = any(c.islower() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(c in "!@#$%^&*()-_=+[]{};:'\",.<>/?|`~" for c in password)
+    if not (has_upper and has_lower and has_digit and has_special):
+        return False, "Include uppercase, lowercase, number, and special character."
+    return True, ""
+
 def _ensure_state_roads_file_exists():
     """Create the state_roads.json file if it's missing."""
     if not STATE_ROADS_PATH.exists():
@@ -196,7 +208,11 @@ def main():
     if st.session_state.is_admin:
         nav_options.append("Admin Panel")
 
-    page = st.sidebar.selectbox("Choose a page:", nav_options)
+    # Handle post-auth redirect once
+    if st.session_state.get("_post_auth_nav"):
+        page = st.session_state.pop("_post_auth_nav")
+    else:
+        page = st.sidebar.selectbox("Choose a page:", nav_options)
 
     # Routing
     if page == "Public Feed":
@@ -260,6 +276,8 @@ def show_login_page():
                         st.session_state.is_admin = False
                         st.success("✅ Login successful!")
                     
+                    # Redirect to verified reports after login
+                    st.session_state["_post_auth_nav"] = "Verified Driver Reports"
                     st.rerun()
                 else:
                     st.error("Please enter both username and password")
@@ -279,26 +297,35 @@ def show_signup_page():
         with col2:
             with st.form("signup_form"):
                 su_username = st.text_input("Choose Username")
-                su_password = st.text_input("Choose Password", type="password")
+                su_password = st.text_input("Choose Password", type="password", help="Min 8 chars with upper, lower, digit, and special.")
                 su_confirm = st.text_input("Confirm Password", type="password")
                 nin = st.text_input("NIN (11 digits)")
+                terms = st.checkbox("I agree to the Terms & Conditions and Privacy Notice")
                 submit_su = st.form_submit_button("Create Account")
                 if submit_su:
                     if not su_username or not su_password or not nin:
                         st.error("Username and password are required.")
                     elif su_password != su_confirm:
                         st.error("Passwords do not match.")
-                    elif not (nin.isdigit() and len(nin) == 11):
-                        st.error("Enter a valid 11-digit NIN.")
                     else:
-                        st.session_state._registered_users[su_username.lower()] = {
-                            "password": su_password,
-                            "nin": nin
-                        }
-                        st.session_state.user_authenticated = True
-                        st.session_state.username = su_username
-                        st.success("🎉 Account created and logged in!")
-                        st.rerun()
+                        ok, msg = _validate_password_strength(su_password)
+                        if not ok:
+                            st.error(msg)
+                        elif not (nin.isdigit() and len(nin) == 11):
+                            st.error("Enter a valid 11-digit NIN.")
+                        elif not terms:
+                            st.error("You must accept the Terms & Conditions to continue.")
+                        else:
+                            st.session_state._registered_users[su_username.lower()] = {
+                                "password": su_password,
+                                "nin": nin
+                            }
+                            st.session_state.user_authenticated = True
+                            st.session_state.username = su_username
+                            st.success("🎉 Account created and logged in!")
+                            # Redirect to Verified Driver Reports
+                            st.session_state["_post_auth_nav"] = "Verified Driver Reports"
+                            st.rerun()
 
 def show_dashboard():
     """Show main dashboard"""
@@ -436,7 +463,7 @@ def show_verified_reports_page():
 def show_public_feed():
     """Public social-media-like feed available without login."""
     st.markdown("## 📰 Public Feed")
-    st.caption("These posts are community-submitted and unverified. Information may be incomplete or inaccurate. For verified driver reports, please log in.")
+    st.caption("By using this app you agree to the Terms & Conditions. Public posts are community-submitted and unverified; information may be incomplete or inaccurate. For verified driver reports, please log in.")
     reports = get_demo_data()[:10]
     for report in reports:
         with st.container():

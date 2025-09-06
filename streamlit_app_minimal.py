@@ -418,6 +418,15 @@ def show_reports_page():
                 st.markdown(f"**Road Condition:** {report['road_condition']}")
                 st.markdown(f"**Created:** {report['created_at']}")
                 st.markdown(f"**User:** {report['user']}")
+                # Community verification: allow users to verify (vote) once per report
+                vote_key = f"voted_{report['id']}"
+                if st.session_state.get(vote_key):
+                    st.success("You verified this report.")
+                else:
+                    if st.button(f"Verify (community) #{report['id']}", key=f"vote_{report['id']}"):
+                        st.session_state[vote_key] = True
+                        report['votes'] += 1
+                        st.success("Thank you for verifying.")
             
             with col2:
                 risk_class = f"risk-{report['risk_level'].lower()}"
@@ -450,8 +459,9 @@ def show_reports_page():
 def show_verified_reports_page():
     """Show only verified driver reports (requires login)."""
     st.markdown("## ✅ Verified Driver Reports")
-    # Simulate genuineness by requiring both Verified status and Medium/High risk (as a proxy for moderation)
-    reports = [r for r in get_demo_data() if r["status"] == "Verified" and r["risk_level"] in ("Medium", "High")]
+    # Community-verified: reports with votes >= threshold
+    VOTE_THRESHOLD = 10
+    reports = [r for r in get_demo_data() if r["votes"] >= VOTE_THRESHOLD]
     if not reports:
         st.info("No verified reports available yet.")
         return

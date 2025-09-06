@@ -168,38 +168,65 @@ def main():
     if "is_admin" not in st.session_state:
         st.session_state.is_admin = False
     
-    # Navigation options
-    nav_options = ["Dashboard", "Reports", "Create Report", "Map View", "Analytics"]
-    if st.session_state.is_admin:
-        nav_options.append("Admin Panel")
-    
-    page = st.sidebar.selectbox("Choose a page:", nav_options)
-    
-    # User authentication (simplified for minimal app)
+    # Auth state
     if "user_authenticated" not in st.session_state:
         st.session_state.user_authenticated = False
-    
-    if not st.session_state.user_authenticated:
-        show_login_page()
-    else:
-        if page == "Dashboard":
-            show_dashboard()
-        elif page == "Reports":
-            show_reports_page()
-        elif page == "Create Report":
-            show_create_report_page()
-        elif page == "Map View":
-            show_map_view()
-        elif page == "Analytics":
-            show_analytics_page()
-        elif page == "Admin Panel" and st.session_state.is_admin:
-            show_admin_panel()
-        
-        # Logout button
+    if "username" not in st.session_state:
+        st.session_state.username = ""
+    if "_registered_users" not in st.session_state:
+        st.session_state._registered_users = {}
+
+    # Navigation options (Public Feed always available)
+    nav_options = [
+        "Public Feed",
+        "Verified Driver Reports",
+        "Dashboard",
+        "Reports",
+        "Create Report",
+        "Map View",
+        "Analytics",
+        "Login / Signup"
+    ]
+    if st.session_state.is_admin:
+        nav_options.append("Admin Panel")
+
+    page = st.sidebar.selectbox("Choose a page:", nav_options)
+
+    # Routing
+    if page == "Public Feed":
+        show_public_feed()
+    elif page == "Verified Driver Reports":
+        if st.session_state.user_authenticated:
+            show_verified_reports_page()
+        else:
+            st.warning("Please log in to view verified driver reports.")
+            show_login_page()
+    elif page == "Dashboard":
+        show_dashboard()
+    elif page == "Reports":
+        show_reports_page()
+    elif page == "Create Report":
+        show_create_report_page()
+    elif page == "Map View":
+        show_map_view()
+    elif page == "Analytics":
+        show_analytics_page()
+    elif page == "Login / Signup":
+        show_signup_page()
+    elif page == "Admin Panel" and st.session_state.is_admin:
+        show_admin_panel()
+
+    # Sidebar auth controls
+    if st.session_state.user_authenticated:
+        st.sidebar.markdown(f"Logged in as **{st.session_state.username}**")
         if st.sidebar.button("Logout"):
             st.session_state.user_authenticated = False
             st.session_state.is_admin = False
+            st.session_state.username = ""
             st.rerun()
+    else:
+        st.sidebar.info("Viewing public feed. Login for verified reports.")
+        
 
 def show_login_page():
     """Show login page"""
@@ -233,6 +260,34 @@ def show_login_page():
         
         st.info("💡 **Demo Mode**: Enter any username and password to continue")
         st.info("🔑 **Admin Access**: Use 'admin/admin' for admin features")
+
+def show_signup_page():
+    """Signup/Login combined page for demo purposes."""
+    st.markdown("## 🔐 Login / ✍️ Signup")
+    login_tab, signup_tab = st.tabs(["Login", "Signup"])
+
+    with login_tab:
+        show_login_page()
+
+    with signup_tab:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            with st.form("signup_form"):
+                su_username = st.text_input("Choose Username")
+                su_password = st.text_input("Choose Password", type="password")
+                su_confirm = st.text_input("Confirm Password", type="password")
+                submit_su = st.form_submit_button("Create Account")
+                if submit_su:
+                    if not su_username or not su_password:
+                        st.error("Username and password are required.")
+                    elif su_password != su_confirm:
+                        st.error("Passwords do not match.")
+                    else:
+                        st.session_state._registered_users[su_username.lower()] = su_password
+                        st.session_state.user_authenticated = True
+                        st.session_state.username = su_username
+                        st.success("🎉 Account created and logged in!")
+                        st.rerun()
 
 def show_dashboard():
     """Show main dashboard"""
@@ -351,6 +406,33 @@ def show_reports_page():
                 with col3:
                     if st.button(f"Delete #{report['id']}", key=f"delete_{report['id']}"):
                         st.success(f"Report #{report['id']} deleted!")
+
+def show_verified_reports_page():
+    """Show only verified driver reports (requires login)."""
+    st.markdown("## ✅ Verified Driver Reports")
+    reports = [r for r in get_demo_data() if r["status"] == "Verified"]
+    if not reports:
+        st.info("No verified reports available yet.")
+        return
+    for report in reports:
+        with st.expander(f"{report['title']} - {report['location']}"):
+            st.markdown(f"**Verified:** Yes")
+            st.markdown(f"**Description:** {report['description']}")
+            st.markdown(f"**Risk:** {report['risk_level']}")
+            st.markdown(f"**Date:** {report['created_at']}")
+
+def show_public_feed():
+    """Public social-media-like feed available without login."""
+    st.markdown("## 📰 Public Feed")
+    st.caption("General community-submitted road status posts. Verified driver reports require login.")
+    reports = get_demo_data()[:10]
+    for report in reports:
+        with st.container():
+            st.markdown(f"**{report['title']}** — {report['location']}")
+            st.markdown(f"{report['description']}")
+            meta = f"{report['created_at']} • {report['road_condition']} • {report['risk_level']} risk"
+            st.caption(meta)
+            st.divider()
 
 def show_create_report_page():
     """Show create report page"""

@@ -519,44 +519,8 @@ def show_map_view():
     """Show interactive map view"""
     st.markdown("## 🗺️ Interactive Map View")
     
-    reports = get_demo_data()
-    
-    # Create map centered on Nigeria
-    m = folium.Map(
-        location=[9.0820, 8.6753],  # Center of Nigeria
-        zoom_start=6,
-        tiles="OpenStreetMap"
-    )
-    
-    # Add markers for each report
-    for report in reports:
-        # Color based on risk level
-        if report["risk_level"] == "High":
-            color = "red"
-        elif report["risk_level"] == "Medium":
-            color = "orange"
-        else:
-            color = "green"
-        
-        # Popup content
-        popup_content = f"""
-        <div style="width: 200px;">
-            <h4>{report['title']}</h4>
-            <p><strong>Location:</strong> {report['location']}</p>
-            <p><strong>Risk Level:</strong> {report['risk_level']}</p>
-            <p><strong>Status:</strong> {report['status']}</p>
-            <p><strong>Road Condition:</strong> {report['road_condition']}</p>
-        </div>
-        """
-        
-        folium.Marker(
-            location=[report["latitude"], report["longitude"]],
-            popup=folium.Popup(popup_content, max_width=300),
-            tooltip=report["title"],
-            icon=folium.Icon(color=color, icon="info-sign")
-        ).add_to(m)
-    
-    # Display map
+    # Create a simple base map centered on Nigeria WITHOUT markers per requirement
+    m = folium.Map(location=[9.0820, 8.6753], zoom_start=6, tiles="OpenStreetMap")
     folium_static(m, width=800, height=600)
     
     # Map legend

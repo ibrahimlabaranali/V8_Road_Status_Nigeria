@@ -5,8 +5,24 @@ from datetime import datetime
 st.set_page_config(page_title="Road Status Admin", page_icon="🛠️", layout="wide")
 
 def get_demo_reports():
-    from streamlit_app_minimal import get_demo_data
-    return pd.DataFrame(get_demo_data())
+    # Self-contained demo data to avoid importing the user app (prevents set_page_config conflicts)
+    statuses = ["Pending", "Verified", "Resolved"]
+    risks = ["Low", "Medium", "High"]
+    rows = []
+    for i in range(1, 16):
+        rows.append({
+            "id": i,
+            "title": f"Report {i}",
+            "description": f"Demo issue description {i}",
+            "location": f"LGA {i%5}, State {i%7}",
+            "latitude": 6.0 + i * 0.1,
+            "longitude": 3.0 + i * 0.1,
+            "risk_level": risks[i % 3],
+            "status": statuses[i % 3],
+            "user": f"User_{i}",
+            "created_at": datetime.now().strftime("%Y-%m-%d")
+        })
+    return pd.DataFrame(rows)
 
 def main():
     st.title("🛠️ Road Status Admin Console")
